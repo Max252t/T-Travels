@@ -632,6 +632,117 @@ paths:
           $ref: '#/components/responses/ExpenseConflict'
         '500':
           $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/balances:
+    get:
+      operationId: getTripBalances
+      summary: Получить балансы участников
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+      responses:
+        '200':
+          description: Балансы участников в копейках
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TripBalance'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/settlements/suggestions:
+    get:
+      operationId: getSettlementSuggestions
+      summary: Получить рекомендации переводов
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+      responses:
+        '200':
+          description: Рекомендации и ревизия расчётов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementSuggestions'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/settlements:
+    get:
+      operationId: listSettlements
+      summary: Посмотреть историю имитаций
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: История переводов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Settlement'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+    post:
+      operationId: createSettlement
+      summary: Имитировать погашение долга
+      description: Отправитель определяется Bearer JWT. Можно погасить рекомендованную сумму полностью или частично.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementCreate'
+      responses:
+        '201':
+          description: Перевод записан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settlement'
+        '400':
+          $ref: '#/components/responses/SettlementBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/SettlementConflict'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
 components:
   parameters:
     ExpenseId:
@@ -842,7 +953,112 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
+    SettlementBadRequest:
+      description: Некорректный запрос (`INVALID_REQUEST`, `INVALID_IDEMPOTENCY_KEY` или `INVALID_SETTLEMENT`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    SettlementConflict:
+      description: Изменилась ревизия, перевод недоступен или ключ уже использован (`SETTLEMENT_REVISION_CONFLICT`, `SETTLEMENT_UNAVAILABLE` или `IDEMPOTENCY_KEY_REUSED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
   schemas:
+    TripBalance:
+      type: object
+      additionalProperties: false
+      required: [user_id, name, balance, active]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        balance:
+          type: integer
+          format: int64
+          description: Положительный баланс означает, что участнику должны.
+        active:
+          type: boolean
+    SettlementTransfer:
+      type: object
+      additionalProperties: false
+      required: [from_user_id, to_user_id, amount]
+      properties:
+        from_user_id:
+          type: string
+          format: uuid
+        to_user_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 2000000000000
+          description: Сумма в копейках.
+    SettlementSuggestions:
+      type: object
+      additionalProperties: false
+      required: [revision, optimal, transfers]
+      description: При количестве ненулевых балансов до 10 включительно optimal равен true и число переводов минимально. Для больших групп optimal равен false.
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        optimal:
+          type: boolean
+        transfers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SettlementTransfer'
+    SettlementCreate:
+      type: object
+      additionalProperties: false
+      required: [to_user_id, amount, revision]
+      properties:
+        to_user_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 2000000000000
+          description: Сумма в копейках.
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+    Settlement:
+      type: object
+      additionalProperties: false
+      required: [id, trip_id, from_user_id, to_user_id, amount, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        trip_id:
+          type: string
+          format: uuid
+        from_user_id:
+          type: string
+          format: uuid
+        to_user_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 2000000000000
+          description: Сумма в копейках.
+        created_at:
+          type: string
+          format: date-time
     TripBudget:
       type: object
       additionalProperties: false
@@ -1174,9 +1390,12 @@ components:
         expense_id:
           type: string
           format: uuid
+        settlement_id:
+          type: string
+          format: uuid
         event_type:
           type: string
-          enum: [member_joined, expense_created, expense_updated, expense_deleted]
+          enum: [member_joined, expense_created, expense_updated, expense_deleted, settlement_completed]
         created_at:
           type: string
           format: date-time

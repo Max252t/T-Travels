@@ -34,6 +34,10 @@ func registerTripRoutes(api *gin.RouterGroup, service *trips.Service) {
 	api.GET("/trips/:tripId/expenses/:expenseId", h.getExpense)
 	api.PATCH("/trips/:tripId/expenses/:expenseId", h.updateExpense)
 	api.DELETE("/trips/:tripId/expenses/:expenseId", h.deleteExpense)
+	api.GET("/trips/:tripId/balances", h.balances)
+	api.GET("/trips/:tripId/settlements/suggestions", h.settlementSuggestions)
+	api.GET("/trips/:tripId/settlements", h.listSettlements)
+	api.POST("/trips/:tripId/settlements", h.createSettlement)
 	api.GET("/notifications", h.notifications)
 	api.PATCH("/notifications/:notificationId/read", h.readNotification)
 	api.POST("/notifications/read-all", h.readAllNotifications)
@@ -268,6 +272,12 @@ func writeTripResult(c *gin.Context, status int, result any, err error) {
 		writeAPIError(c, http.StatusConflict, "VERSION_CONFLICT", "Расход уже был изменён")
 	case errors.Is(err, trips.ErrExpenseLimit):
 		writeAPIError(c, http.StatusConflict, "EXPENSE_LIMIT_EXCEEDED", "Сумма расходов поездки превышает допустимый предел")
+	case errors.Is(err, trips.ErrInvalidSettlement):
+		writeAPIError(c, http.StatusBadRequest, "INVALID_SETTLEMENT", "Проверьте получателя, сумму и версию рекомендаций")
+	case errors.Is(err, trips.ErrSettlementRevision):
+		writeAPIError(c, http.StatusConflict, "SETTLEMENT_REVISION_CONFLICT", "Обновите рекомендации переводов")
+	case errors.Is(err, trips.ErrSettlementUnavailable):
+		writeAPIError(c, http.StatusConflict, "SETTLEMENT_UNAVAILABLE", "Этот перевод или сумма отсутствуют в текущих рекомендациях")
 	case errors.Is(err, idempotency.ErrKeyReused):
 		writeAPIError(c, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Ключ уже использован для другого запроса")
 	case errors.Is(err, trips.ErrRateLimit):

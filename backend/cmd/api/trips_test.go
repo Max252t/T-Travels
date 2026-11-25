@@ -31,7 +31,7 @@ func TestTripsPostgres(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for _, table := range []string{"notifications", "invitations", "expense_splits", "expenses", "trip_members"} {
+		for _, table := range []string{"notifications", "settlements", "invitations", "expense_splits", "expenses", "trip_members"} {
 			if _, err := pool.Exec(ctx, "DELETE FROM "+table+" WHERE trip_id = ANY($1::text[]::uuid[])", tripIDs); err != nil {
 				t.Errorf("could not clean up %s: %v", table, err)
 			}
@@ -257,4 +257,109 @@ func TestTripsPostgres(t *testing.T) {
 		t.Fatal("percentage split changed the participant list")
 	}
 	checkBudget(12, -12)
+
+	balancesPath := path + "/balances"
+	settlementsPath := path + "/settlements"
+	suggestionsPath := settlementsPath + "/suggestions"
+	check(call("GET", balancesPath, outsider, 0, ""), 404)
+	check(call("GET", suggestionsPath, outsider, 0, ""), 404)
+	checkBalances := func(ownerAmount, memberAmount int64) {
+		t.Helper()
+		var balances []trips.Balance
+		decode(check(call("GET", balancesPath, member, 0, ""), 200), &balances)
+		if len(balances) != 2 {
+			t.Fatalf("expected two balances, got %d", len(balances))
+		}
+		want := map[string]int64{users[0]: ownerAmount, users[1]: memberAmount}
+		for _, balance := range balances {
+			amount, exists := want[balance.UserID]
+			if !exists || !balance.Active || balance.Balance != amount {
+				t.Fatalf("incorrect balance: %+v", balance)
+			}
+		}
+	}
+	checkBalances(3, -3)
+	readSuggestions := func(amount int64) trips.Suggestions {
+		t.Helper()
+		var suggestions trips.Suggestions
+		decode(check(call("GET", suggestionsPath, member, 0, ""), 200), &suggestions)
+		if !suggestions.Optimal || suggestions.Revision < 1 {
+			t.Fatal("invalid suggestions metadata")
+		}
+		if amount == 0 && len(suggestions.Transfers) != 0 {
+			t.Fatal("zero balances should have no transfers")
+		}
+		if amount > 0 && (len(suggestions.Transfers) != 1 || suggestions.Transfers[0] != (trips.Transfer{FromUserID: users[1], ToUserID: users[0], Amount: amount})) {
+			t.Fatalf("incorrect transfer suggestions: %+v", suggestions)
+		}
+		return suggestions
+	}
+	suggestions := readSuggestions(3)
+	settleBody := func(to string, amount, revision int64) string {
+		return fmt.Sprintf(`{"to_user_id":%q,"amount":%d,"revision":%d}`, to, amount, revision)
+	}
+	check(call("POST", settlementsPath, outsider, 9, settleBody(users[0], 1, suggestions.Revision)), 404)
+	check(call("POST", settlementsPath, owner, 9, settleBody(users[1], 1, suggestions.Revision)), 409)
+	check(call("POST", settlementsPath, member, 9, settleBody(users[0], 4, suggestions.Revision)), 409)
+	check(call("PATCH", percentagePath, member, 5, `{"version":2,"description":"Поездка на вокзал"}`), 200)
+	check(call("POST", settlementsPath, member, 9, settleBody(users[0], 1, suggestions.Revision)), 409)
+	suggestions = readSuggestions(3)
+	partial := settleBody(users[0], 2, suggestions.Revision)
+	type keyedResult struct {
+		key    int
+		result result
+	}
+	competing := make(chan keyedResult, 2)
+	for _, key := range []int{9, 10} {
+		go func() { competing <- keyedResult{key, call("POST", settlementsPath, member, key, partial)} }()
+	}
+	var recorded trips.Settlement
+	var wonKey int
+	for range 2 {
+		attempt := <-competing
+		if attempt.result.response.Code == 201 {
+			if wonKey != 0 {
+				t.Fatal("both concurrent transfers succeeded")
+			}
+			wonKey = attempt.key
+			raw := check(attempt.result, 201)
+			decode(raw, &recorded)
+		} else {
+			check(attempt.result, 409)
+		}
+	}
+	if wonKey == 0 || recorded.FromUserID != users[1] || recorded.ToUserID != users[0] || recorded.Amount != 2 {
+		t.Fatalf("wrong simulated transfer: %+v", recorded)
+	}
+	var retried trips.Settlement
+	decode(check(call("POST", settlementsPath, member, wonKey, partial), 201), &retried)
+	if recorded != retried {
+		t.Fatal("replay returned a different transfer")
+	}
+	check(call("POST", settlementsPath, member, wonKey, settleBody(users[0], 1, suggestions.Revision)), 409)
+	checkBalances(1, -1)
+	suggestions = readSuggestions(1)
+	check(call("POST", settlementsPath, member, 11, settleBody(users[0], 1, suggestions.Revision)), 201)
+	checkBalances(0, 0)
+	readSuggestions(0)
+	checkBudget(12, -12)
+	var history []trips.Settlement
+	decode(check(call("GET", settlementsPath, owner, 0, ""), 200), &history)
+	if len(history) != 2 || history[1] != recorded || history[0].Amount != 1 {
+		t.Fatal("incorrect transfer history")
+	}
+	notifications = nil
+	decode(check(call("GET", "/notifications", owner, 0, ""), 200), &notifications)
+	var settlementEvents int
+	for _, event := range notifications {
+		if event.EventType == "settlement_completed" {
+			if event.SettlementID == nil {
+				t.Fatal("settlement notification has no settlement id")
+			}
+			settlementEvents++
+		}
+	}
+	if settlementEvents != 2 {
+		t.Fatalf("expected two settlement notifications, got %d", settlementEvents)
+	}
 }
