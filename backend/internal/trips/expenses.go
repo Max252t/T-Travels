@@ -126,6 +126,9 @@ func (s *Service) CreateExpense(ctx context.Context, userID, tripID, key string,
 			if err := insertShares(ctx, tx, tripID, id, shares); err != nil {
 				return Expense{}, err
 			}
+			if err := bumpFinancialRevision(ctx, tx, tripID); err != nil {
+				return Expense{}, err
+			}
 			if err := notifyExpense(ctx, tx, tripID, userID, id, "expense_created"); err != nil {
 				return Expense{}, err
 			}
@@ -214,6 +217,9 @@ func (s *Service) UpdateExpense(ctx context.Context, userID, tripID, expenseID, 
 					return Expense{}, err
 				}
 			}
+			if err := bumpFinancialRevision(ctx, tx, tripID); err != nil {
+				return Expense{}, err
+			}
 			if err := notifyExpense(ctx, tx, tripID, userID, expenseID, "expense_updated"); err != nil {
 				return Expense{}, err
 			}
@@ -247,6 +253,9 @@ func (s *Service) DeleteExpense(ctx context.Context, userID, tripID, expenseID, 
 				return false, ErrExpenseVersion
 			}
 			if _, err := tx.Exec(ctx, `UPDATE expenses SET deleted_at = now(), version = version + 1 WHERE id = $1::text::uuid`, expenseID); err != nil {
+				return false, err
+			}
+			if err := bumpFinancialRevision(ctx, tx, tripID); err != nil {
 				return false, err
 			}
 			err = notifyExpense(ctx, tx, tripID, userID, expenseID, "expense_deleted")
