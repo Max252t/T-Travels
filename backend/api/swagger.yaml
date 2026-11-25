@@ -743,8 +743,130 @@ paths:
           $ref: '#/components/responses/AuthUnsupportedMedia'
         '500':
           $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/expenses/{expenseId}/dispute:
+    post:
+      operationId: openExpenseDispute
+      summary: Оспорить расход
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/ExpenseId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenExpenseDispute'
+      responses:
+        '201':
+          description: Открытый спор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseDispute'
+        '400':
+          $ref: '#/components/responses/DisputeBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/ExpenseNotFound'
+        '409':
+          $ref: '#/components/responses/DisputeConflict'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/expenses/{expenseId}/dispute/resolve:
+    post:
+      operationId: resolveExpenseDispute
+      summary: Закрыть свой спор
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/ExpenseId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Закрытый спор
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseDispute'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '403':
+          $ref: '#/components/responses/DisputeAuthorRequired'
+        '404':
+          $ref: '#/components/responses/DisputeNotFound'
+        '409':
+          $ref: '#/components/responses/DisputeConflict'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/leave:
+    post:
+      operationId: leaveTrip
+      summary: Выйти из поездки
+      description: Для завершения членства нужны нулевой баланс и отсутствие открытых споров, инициированных участником.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: Членство завершено
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/TripMemberNotFound'
+        '409':
+          $ref: '#/components/responses/TripMemberConflict'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/members/{userId}:
+    delete:
+      operationId: removeTripMember
+      summary: Исключить участника поездки
+      description: Для завершения членства нужны нулевой баланс и отсутствие открытых споров, инициированных участником.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/TripMemberUserId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: Членство завершено
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '403':
+          $ref: '#/components/responses/TripForbidden'
+        '404':
+          $ref: '#/components/responses/TripMemberNotFound'
+        '409':
+          $ref: '#/components/responses/TripMemberConflict'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
 components:
   parameters:
+    TripMemberUserId:
+      in: path
+      name: userId
+      required: true
+      schema:
+        type: string
+        format: uuid
     ExpenseId:
       in: path
       name: expenseId
@@ -942,7 +1064,7 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
     ExpenseConflict:
-      description: Конфликт версии, ключа или общего лимита (`VERSION_CONFLICT`, `IDEMPOTENCY_KEY_REUSED` или `EXPENSE_LIMIT_EXCEEDED`)
+      description: Конфликт версии, ключа, общего лимита, открытого спора или баланса бывшего участника (`VERSION_CONFLICT`, `IDEMPOTENCY_KEY_REUSED`, `EXPENSE_LIMIT_EXCEEDED`, `EXPENSE_DISPUTE_OPEN` или `INACTIVE_MEMBER_BALANCE`)
       content:
         application/json:
           schema:
@@ -960,12 +1082,82 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
     SettlementConflict:
-      description: Изменилась ревизия, перевод недоступен или ключ уже использован (`SETTLEMENT_REVISION_CONFLICT`, `SETTLEMENT_UNAVAILABLE` или `IDEMPOTENCY_KEY_REUSED`)
+      description: Изменилась ревизия, перевод недоступен, ключ уже использован или требуется подтверждение открытых споров (`SETTLEMENT_REVISION_CONFLICT`, `SETTLEMENT_UNAVAILABLE`, `IDEMPOTENCY_KEY_REUSED` или `DISPUTE_ACKNOWLEDGEMENT_REQUIRED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    DisputeBadRequest:
+      description: Некорректный запрос или причина (`INVALID_REQUEST`, `INVALID_DISPUTE` или `INVALID_IDEMPOTENCY_KEY`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    DisputeConflict:
+      description: Открытый спор уже существует или ключ использован (`EXPENSE_DISPUTE_OPEN` или `IDEMPOTENCY_KEY_REUSED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    DisputeNotFound:
+      description: Поездка, расход или открытый спор не найдены (`TRIP_NOT_FOUND`, `EXPENSE_NOT_FOUND` или `DISPUTE_NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    DisputeAuthorRequired:
+      description: Закрыть спор может его инициатор (`DISPUTE_AUTHOR_REQUIRED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    TripMemberNotFound:
+      description: Поездка или участник не найдены (`TRIP_NOT_FOUND` или `MEMBER_NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    TripMemberConflict:
+      description: Организатор должен остаться в поездке, у участника есть баланс или открытый спор либо ключ уже использован (`TRIP_OWNER_REQUIRED`, `NONZERO_MEMBER_BALANCE`, `MEMBER_DISPUTE_OPEN` или `IDEMPOTENCY_KEY_REUSED`)
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
   schemas:
+    OpenExpenseDispute:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+    ExpenseDispute:
+      type: object
+      additionalProperties: false
+      required: [id, expense_id, created_by, reason, created_at, resolved_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        expense_id:
+          type: string
+          format: uuid
+        created_by:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
     TripBalance:
       type: object
       additionalProperties: false
@@ -1002,7 +1194,7 @@ components:
     SettlementSuggestions:
       type: object
       additionalProperties: false
-      required: [revision, optimal, transfers]
+      required: [revision, optimal, transfers, has_open_disputes]
       description: При количестве ненулевых балансов до 10 включительно optimal равен true и число переводов минимально. Для больших групп optimal равен false.
       properties:
         revision:
@@ -1010,6 +1202,8 @@ components:
           format: int64
           minimum: 1
         optimal:
+          type: boolean
+        has_open_disputes:
           type: boolean
         transfers:
           type: array
@@ -1033,6 +1227,10 @@ components:
           type: integer
           format: int64
           minimum: 1
+        acknowledge_disputes:
+          type: boolean
+          default: false
+          description: Подтверждение предупреждения о незакрытых спорах.
     Settlement:
       type: object
       additionalProperties: false
@@ -1244,6 +1442,8 @@ components:
           maxItems: 100
           items:
             $ref: '#/components/schemas/ExpenseShare'
+        dispute:
+          $ref: '#/components/schemas/ExpenseDispute'
     TripCreate:
       type: object
       additionalProperties: false
@@ -1393,9 +1593,12 @@ components:
         settlement_id:
           type: string
           format: uuid
+        member_id:
+          type: string
+          format: uuid
         event_type:
           type: string
-          enum: [member_joined, expense_created, expense_updated, expense_deleted, settlement_completed]
+          enum: [member_joined, member_left, expense_created, expense_updated, expense_deleted, expense_disputed, dispute_resolved, settlement_completed]
         created_at:
           type: string
           format: date-time

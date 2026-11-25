@@ -17,6 +17,7 @@ type Notification struct {
 	ActorID      string     `json:"actor_id"`
 	ExpenseID    *string    `json:"expense_id,omitempty"`
 	SettlementID *string    `json:"settlement_id,omitempty"`
+	MemberID     *string    `json:"member_id,omitempty"`
 	EventType    string     `json:"event_type"`
 	CreatedAt    time.Time  `json:"created_at"`
 	ReadAt       *time.Time `json:"read_at"`
@@ -43,8 +44,16 @@ func notifySettlement(ctx context.Context, tx pgx.Tx, tripID, actorID, settlemen
 	return err
 }
 
+func notifyDeparture(ctx context.Context, tx pgx.Tx, tripID, actorID, memberID string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO notifications (recipient_id, trip_id, actor_id, member_id, event_type)
+		SELECT user_id, trip_id, $2::text::uuid, $3::text::uuid, 'member_left' FROM trip_members
+		WHERE trip_id = $1::text::uuid AND user_id <> $2::text::uuid AND left_at IS NULL`, tripID, actorID, memberID)
+	return err
+}
+
 func (s *Service) Notifications(ctx context.Context, userID string, limit, offset int32) ([]Notification, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id::text, trip_id::text, actor_id::text, expense_id::text, settlement_id::text, event_type, created_at, read_at
+	rows, err := s.pool.Query(ctx, `SELECT id::text, trip_id::text, actor_id::text, expense_id::text,
+		settlement_id::text, member_id::text, event_type, created_at, read_at
 		FROM notifications WHERE recipient_id = $1::text::uuid
 		ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, userID, limit, offset)
 	if err != nil {
@@ -53,7 +62,7 @@ func (s *Service) Notifications(ctx context.Context, userID string, limit, offse
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Notification, error) {
 		var notification Notification
 		err := row.Scan(&notification.ID, &notification.TripID, &notification.ActorID, &notification.ExpenseID,
-			&notification.SettlementID, &notification.EventType, &notification.CreatedAt, &notification.ReadAt)
+			&notification.SettlementID, &notification.MemberID, &notification.EventType, &notification.CreatedAt, &notification.ReadAt)
 		notification.CreatedAt = notification.CreatedAt.UTC()
 		if notification.ReadAt != nil {
 			notification.ReadAt = new(notification.ReadAt.UTC())
