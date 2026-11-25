@@ -41,3 +41,29 @@ jobs:
       - run: go vet -mod=readonly ./...
       - run: go test -mod=readonly ./...
       - run: go build -mod=readonly ./...
+
+  postgres-migrations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      COMPOSE_PROJECT_NAME: t-travels-ci
+      POSTGRES_PASSWORD: ci_test_password
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Apply and roll back migrations
+        run: |
+          docker compose up -d --wait postgres
+          docker compose run --rm migrate up
+          docker compose run --rm migrate down -all
+          docker compose run --rm migrate up
+          docker compose run --rm migrate up
+          result=$(docker compose exec -T postgres psql -XAt -v ON_ERROR_STOP=1 -U t_travels -d t_travels -c "SELECT to_regclass('public.users') IS NOT NULL AND to_regclass('public.refresh_sessions') IS NOT NULL")
+          test "$result" = t
+      - name: Remove test database
+        if: always()
+        run: docker compose down --volumes
