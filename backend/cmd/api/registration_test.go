@@ -20,7 +20,7 @@ import (
 const registerPath = "/api/v1/auth/register"
 
 func TestRegistrationRejectsInvalidBodies(t *testing.T) {
-	router := newRouter(auth.NewService(nil, nil))
+	router := newRouter(auth.NewService(nil, nil), nil)
 	contract := loadContract(t, router)
 	for _, test := range []struct {
 		name        string
@@ -68,7 +68,7 @@ func TestRegisterPostgres(t *testing.T) {
 		}
 	})
 
-	router := newRouter(auth.NewService(pool, nil))
+	router := newRouter(auth.NewService(pool, nil), nil)
 	contract := loadContract(t, router)
 	const password = "correct horse battery staple"
 	for _, attempt := range []struct {

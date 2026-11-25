@@ -24,7 +24,7 @@ type registrationRequest struct {
 
 func registerUser(service *auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		request := decodeAuthRequest[registrationRequest](c)
+		request := decodeJSONRequest[registrationRequest](c)
 		if request == nil {
 			return
 		}
@@ -50,7 +50,7 @@ func registerUser(service *auth.Service) gin.HandlerFunc {
 	}
 }
 
-func decodeAuthRequest[T any](c *gin.Context) *T {
+func decodeJSONRequest[T any](c *gin.Context) *T {
 	mediaType, params, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
 	charset := params["charset"]
 	encodings := c.Request.Header.Values("Content-Encoding")

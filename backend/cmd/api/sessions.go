@@ -23,7 +23,7 @@ type refreshRequest struct {
 
 func loginUser(service *auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		request := decodeAuthRequest[loginRequest](c)
+		request := decodeJSONRequest[loginRequest](c)
 		if request == nil {
 			return
 		}
@@ -68,7 +68,7 @@ func logoutSession(service *auth.Service) gin.HandlerFunc {
 }
 
 func decodeRefreshRequest(c *gin.Context) *refreshRequest {
-	request := decodeAuthRequest[refreshRequest](c)
+	request := decodeJSONRequest[refreshRequest](c)
 	if request != nil && request.Token == "" {
 		writeAPIError(c, http.StatusBadRequest, "INVALID_REQUEST", "Укажите refresh-токен")
 		return nil

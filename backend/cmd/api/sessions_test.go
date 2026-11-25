@@ -29,7 +29,7 @@ func TestAuthSessionsPostgres(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 	key := []byte(rand.Text() + rand.Text())
-	api := newRouter(auth.NewService(pool, key))
+	api := newRouter(auth.NewService(pool, key), nil)
 	contract := loadContract(t, api)
 	post := func(path string, value any) (*http.Request, *httptest.ResponseRecorder) {
 		body, err := json.Marshal(value)

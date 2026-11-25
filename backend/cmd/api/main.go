@@ -10,6 +10,7 @@ import (
 
 	"github.com/Max252t/T-Travels/backend/api"
 	"github.com/Max252t/T-Travels/backend/internal/auth"
+	"github.com/Max252t/T-Travels/backend/internal/trips"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -48,7 +49,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           newRouter(auth.NewService(pool, jwtKey)),
+		Handler:           newRouter(auth.NewService(pool, jwtKey), trips.NewService(pool)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 	}
@@ -56,7 +57,7 @@ func run() error {
 	return server.ListenAndServe()
 }
 
-func newRouter(authService *auth.Service) *gin.Engine {
+func newRouter(authService *auth.Service, tripService *trips.Service) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.GET("/healthz", func(c *gin.Context) {
@@ -72,5 +73,6 @@ func newRouter(authService *auth.Service) *gin.Engine {
 	authRoutes.POST("/logout", logoutSession(authService))
 	users := router.Group("/api/v1/users", requireAccessToken(authService))
 	users.GET("/me", getCurrentUser(authService))
+	registerTripRoutes(router.Group("/api/v1", requireAccessToken(authService)), tripService)
 	return router
 }
