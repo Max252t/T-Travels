@@ -19,6 +19,8 @@ const (
 	accessLifetime  = 15 * time.Minute
 	refreshLifetime = 30 * 24 * time.Hour
 	refreshBytes    = 32
+	accessIssuer    = "t-travels"
+	accessAudience  = "t-travels-api"
 )
 
 var (
@@ -119,9 +121,9 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 func (s *Service) signTokens(userID, refresh string) (Tokens, error) {
 	now := time.Now()
 	access, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Issuer:    "t-travels",
+		Issuer:    accessIssuer,
 		Subject:   userID,
-		Audience:  jwt.ClaimStrings{"t-travels-api"},
+		Audience:  jwt.ClaimStrings{accessAudience},
 		ExpiresAt: jwt.NewNumericDate(now.Add(accessLifetime)),
 		IssuedAt:  jwt.NewNumericDate(now),
 		ID:        rand.Text(),

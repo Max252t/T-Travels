@@ -37,6 +37,8 @@ docker compose run --rm migrate version
 
 `POST /api/v1/auth/logout` принимает текущий `refresh_token` и отзывает сессию. Уже выданный JWT действует до истечения своего срока.
 
+`GET /api/v1/users/me` возвращает `id`, `email` и `name` текущего пользователя. Передайте access-токен в заголовке `Authorization: Bearer <access_token>`.
+
 ## Ветки и CI
 
 Новые ветки `feature/*` и `fix/*` создаются от `develop`. Изменения попадают в `develop` через pull request. Готовую версию переносим из `develop` в `main`.

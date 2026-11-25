@@ -70,5 +70,7 @@ func newRouter(authService *auth.Service) *gin.Engine {
 	authRoutes.POST("/login", loginUser(authService))
 	authRoutes.POST("/refresh", refreshSession(authService))
 	authRoutes.POST("/logout", logoutSession(authService))
+	users := router.Group("/api/v1/users", requireAccessToken(authService))
+	users.GET("/me", getCurrentUser(authService))
 	return router
 }
