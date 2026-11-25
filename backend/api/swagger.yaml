@@ -151,7 +151,47 @@ paths:
           $ref: '#/components/responses/AuthUnsupportedMedia'
         '500':
           $ref: '#/components/responses/AuthInternalError'
+  /api/v1/users/me:
+    get:
+      operationId: getCurrentUser
+      summary: Получить свой профиль
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Профиль текущего пользователя
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-store]
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisteredUser'
+        '401':
+          description: Требуется действующий access-токен (`INVALID_ACCESS_TOKEN`)
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+                enum: [Bearer]
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Ошибка получения профиля (`INTERNAL_ERROR`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   requestBodies:
     RefreshToken:
       required: true

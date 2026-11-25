@@ -91,6 +91,18 @@ func TestAuthSessionsPostgres(t *testing.T) {
 		return tokens
 	}
 	tokens := readTokens(login)
+	profileRequest := httptest.NewRequest(http.MethodGet, profilePath+"?user_id=dfd03c83-8a17-4b1f-ad37-608a0ac25f4d", nil)
+	profileRequest.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	profileResponse := httptest.NewRecorder()
+	api.ServeHTTP(profileResponse, profileRequest)
+	if profileResponse.Code != http.StatusOK || profileResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected profile response status %d", profileResponse.Code)
+	}
+	validateResponse(t, contract, profileRequest, profileResponse)
+	var profile auth.User
+	if err := json.Unmarshal(profileResponse.Body.Bytes(), &profile); err != nil || profile != user {
+		t.Fatal("profile does not match the user from the access token")
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(tokens.RefreshToken)
 	if err != nil || len(raw) != 32 {
 		t.Fatal("invalid refresh token format")
