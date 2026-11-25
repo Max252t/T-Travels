@@ -64,6 +64,14 @@ jobs:
           docker compose run --rm migrate up
           result=$(docker compose exec -T postgres psql -XAt -v ON_ERROR_STOP=1 -U t_travels -d t_travels -c "SELECT to_regclass('public.users') IS NOT NULL AND to_regclass('public.refresh_sessions') IS NOT NULL")
           test "$result" = t
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version: '1.27.4'
+          cache-dependency-path: backend/go.sum
+      - name: Verify registration with PostgreSQL
+        env:
+          TEST_DATABASE_URL: postgres://t_travels:ci_test_password@127.0.0.1:5432/t_travels?sslmode=disable
+        run: go test -mod=readonly -count=1 -run '^TestRegisterPostgres$' ./cmd/api
       - name: Remove test database
         if: always()
         run: docker compose down --volumes
