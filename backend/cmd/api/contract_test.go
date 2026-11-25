@@ -7,11 +7,24 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/legacy"
 )
 
 func TestHealthContract(t *testing.T) {
-	router := newRouter()
+	router := newRouter(nil)
+	contract := loadContract(t, router)
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("health response: status %d, body %s", response.Code, response.Body)
+	}
+	validateResponse(t, contract, request, response)
+}
+
+func loadContract(t *testing.T, router http.Handler) routers.Router {
+	t.Helper()
 	spec := httptest.NewRecorder()
 	router.ServeHTTP(spec, httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil))
 	if spec.Code != http.StatusOK || spec.Header().Get("Content-Type") != "application/yaml" {
@@ -30,16 +43,14 @@ func TestHealthContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return contract
+}
 
-	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+func validateResponse(t *testing.T, contract routers.Router, request *http.Request, response *httptest.ResponseRecorder) {
+	t.Helper()
 	route, pathParams, err := contract.FindRoute(request)
 	if err != nil {
 		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("health response: status %d, body %s", response.Code, response.Body)
 	}
 	validation := &openapi3filter.ResponseValidationInput{
 		RequestValidationInput: &openapi3filter.RequestValidationInput{
