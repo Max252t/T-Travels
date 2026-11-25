@@ -31,7 +31,7 @@ func TestTripsPostgres(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for _, table := range []string{"notifications", "settlements", "invitations", "expense_splits", "expenses", "trip_members"} {
+		for _, table := range []string{"notifications", "settlements", "invitations", "expense_disputes", "expense_splits", "expenses", "trip_members"} {
 			if _, err := pool.Exec(ctx, "DELETE FROM "+table+" WHERE trip_id = ANY($1::text[]::uuid[])", tripIDs); err != nil {
 				t.Errorf("could not clean up %s: %v", table, err)
 			}
@@ -279,6 +279,44 @@ func TestTripsPostgres(t *testing.T) {
 		}
 	}
 	checkBalances(3, -3)
+	leavePath := path + "/leave"
+	removePath := path + "/members/" + users[1]
+	checkCode := func(response result, status int, code string) {
+		t.Helper()
+		var payload struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		decode(check(response, status), &payload)
+		if payload.Error.Code != code {
+			t.Fatalf("got error code %q, want %q", payload.Error.Code, code)
+		}
+	}
+	checkCode(call("POST", leavePath, member, 19, ""), 409, "NONZERO_MEMBER_BALANCE")
+	checkCode(call("DELETE", removePath, owner, 19, ""), 409, "NONZERO_MEMBER_BALANCE")
+	checkCode(call("POST", leavePath, owner, 19, ""), 409, "TRIP_OWNER_REQUIRED")
+	check(call("DELETE", removePath, member, 19, ""), 403)
+	disputePath := percentagePath + "/dispute"
+	const reason = `{"reason":"Проверить оплату такси"}`
+	check(call("POST", disputePath, outsider, 20, reason), 404)
+	openedJSON := string(check(call("POST", disputePath, member, 20, reason), 201))
+	var opened trips.ExpenseDispute
+	decode([]byte(openedJSON), &opened)
+	if opened.CreatedBy != users[1] || opened.ExpenseID != expense.ID || opened.ResolvedAt != nil ||
+		string(check(call("POST", disputePath, member, 20, reason), 201)) != openedJSON {
+		t.Fatal("incorrect dispute or replay")
+	}
+	checkCode(call("POST", disputePath, owner, 20, reason), 409, "EXPENSE_DISPUTE_OPEN")
+	checkCode(call("POST", disputePath+"/resolve", owner, 20, ""), 403, "DISPUTE_AUTHOR_REQUIRED")
+	checkCode(call("DELETE", percentagePath+"?version=2", owner, 20, ""), 409, "EXPENSE_DISPUTE_OPEN")
+	var disputedExpense trips.Expense
+	decode(check(call("GET", percentagePath, owner, 0, ""), 200), &disputedExpense)
+	if disputedExpense.Dispute == nil || disputedExpense.Dispute.ID != opened.ID {
+		t.Fatal("expense does not expose its dispute")
+	}
+	checkBalances(3, -3)
+	checkBudget(12, -12)
 	readSuggestions := func(amount int64) trips.Suggestions {
 		t.Helper()
 		var suggestions trips.Suggestions
@@ -295,8 +333,13 @@ func TestTripsPostgres(t *testing.T) {
 		return suggestions
 	}
 	suggestions := readSuggestions(3)
+	if !suggestions.HasOpenDisputes {
+		t.Fatal("settlement suggestions did not report the open dispute")
+	}
+	checkCode(call("POST", settlementsPath, member, 9,
+		fmt.Sprintf(`{"to_user_id":%q,"amount":2,"revision":%d}`, users[0], suggestions.Revision)), 409, "DISPUTE_ACKNOWLEDGEMENT_REQUIRED")
 	settleBody := func(to string, amount, revision int64) string {
-		return fmt.Sprintf(`{"to_user_id":%q,"amount":%d,"revision":%d}`, to, amount, revision)
+		return fmt.Sprintf(`{"to_user_id":%q,"amount":%d,"revision":%d,"acknowledge_disputes":true}`, to, amount, revision)
 	}
 	check(call("POST", settlementsPath, outsider, 9, settleBody(users[0], 1, suggestions.Revision)), 404)
 	check(call("POST", settlementsPath, owner, 9, settleBody(users[1], 1, suggestions.Revision)), 409)
@@ -361,5 +404,48 @@ func TestTripsPostgres(t *testing.T) {
 	}
 	if settlementEvents != 2 {
 		t.Fatalf("expected two settlement notifications, got %d", settlementEvents)
+	}
+	checkCode(call("POST", leavePath, member, 19, ""), 409, "MEMBER_DISPUTE_OPEN")
+	checkCode(call("DELETE", removePath, owner, 19, ""), 409, "MEMBER_DISPUTE_OPEN")
+	resolvedJSON := string(check(call("POST", disputePath+"/resolve", member, 21, ""), 200))
+	var resolved trips.ExpenseDispute
+	decode([]byte(resolvedJSON), &resolved)
+	if resolved.ID != opened.ID || resolved.ResolvedAt == nil ||
+		string(check(call("POST", disputePath+"/resolve", member, 21, ""), 200)) != resolvedJSON {
+		t.Fatal("resolution was not saved and replayed")
+	}
+	if readSuggestions(0).HasOpenDisputes {
+		t.Fatal("resolved dispute still affects the warning")
+	}
+	var resolvedCount int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM expense_disputes WHERE expense_id = $1::text::uuid AND resolved_at IS NOT NULL`, expense.ID).
+		Scan(&resolvedCount); err != nil || resolvedCount != 1 {
+		t.Fatal("dispute history was not preserved")
+	}
+
+	check(call("POST", leavePath, member, 19, ""), 204)
+	check(call("POST", leavePath, member, 19, ""), 204)
+	check(call("GET", percentagePath, member, 0, ""), 404)
+	checkCode(call("PATCH", percentagePath, owner, 22, `{"version":3,"amount":16}`), 409, "INACTIVE_MEMBER_BALANCE")
+	checkCode(call("DELETE", percentagePath+"?version=3", owner, 22, ""), 409, "INACTIVE_MEMBER_BALANCE")
+	var historical []trips.Balance
+	decode(check(call("GET", balancesPath, owner, 0, ""), 200), &historical)
+	if len(historical) != 2 {
+		t.Fatal("former member missing from ledger")
+	}
+	for _, balance := range historical {
+		if balance.Balance != 0 || balance.Active != (balance.UserID == users[0]) {
+			t.Fatal("former member ledger changed")
+		}
+	}
+	var newInvite trips.Invitation
+	decode(check(call("POST", path+"/invitations", owner, 23, ""), 201), &newInvite)
+	check(call("POST", "/trips/join", member, 23, fmt.Sprintf(`{"code":%q}`, newInvite.Code)), 200)
+	check(call("DELETE", removePath, owner, 24, ""), 204)
+	check(call("DELETE", removePath, owner, 24, ""), 204)
+	check(call("GET", settlementsPath, member, 0, ""), 404)
+	decode(check(call("GET", settlementsPath, owner, 0, ""), 200), &history)
+	if len(history) != 2 {
+		t.Fatal("membership changes removed transfer history")
 	}
 }

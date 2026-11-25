@@ -151,20 +151,22 @@ func (s *Service) Update(ctx context.Context, userID, tripID, key string, patch 
 }
 
 func (s *Service) Members(ctx context.Context, userID, tripID string, limit, offset int32) ([]Member, error) {
-	if _, err := s.Get(ctx, userID, tripID); err != nil {
-		return nil, err
-	}
-	rows, err := s.pool.Query(ctx, `SELECT m.user_id::text, u.name, m.role
-		FROM trip_members m JOIN users u ON u.id = m.user_id
-		WHERE m.trip_id = $1::text::uuid AND m.left_at IS NULL
-		ORDER BY m.role DESC, m.joined_at, m.user_id LIMIT $2 OFFSET $3`, tripID, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Member, error) {
-		var member Member
-		err := row.Scan(&member.UserID, &member.Name, &member.Role)
-		return member, err
+	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Member, error) {
+		if _, err := getTrip(ctx, tx, userID, tripID, false); err != nil {
+			return nil, err
+		}
+		rows, err := tx.Query(ctx, `SELECT m.user_id::text, u.name, m.role
+			FROM trip_members m JOIN users u ON u.id = m.user_id
+			WHERE m.trip_id = $1::text::uuid AND m.left_at IS NULL
+			ORDER BY m.role DESC, m.joined_at, m.user_id LIMIT $2 OFFSET $3`, tripID, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Member, error) {
+			var member Member
+			err := row.Scan(&member.UserID, &member.Name, &member.Role)
+			return member, err
+		})
 	})
 }
 
@@ -173,16 +175,27 @@ type queryRower interface {
 }
 
 func getTrip(ctx context.Context, db queryRower, userID, tripID string, lock bool) (Trip, error) {
+	if lock {
+		if err := lockTrip(ctx, db, tripID); err != nil {
+			return Trip{}, err
+		}
+	}
 	query := `SELECT ` + tripFields + ` FROM trips t JOIN trip_members m ON m.trip_id = t.id
 		WHERE t.id = $1::text::uuid AND m.user_id = $2::text::uuid AND m.left_at IS NULL`
-	if lock {
-		query += ` FOR UPDATE OF t`
-	}
 	trip, err := scanTrip(db.QueryRow(ctx, query, tripID, userID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Trip{}, ErrNotFound
 	}
 	return trip, err
+}
+
+func lockTrip(ctx context.Context, db queryRower, tripID string) error {
+	var id string
+	err := db.QueryRow(ctx, `SELECT id::text FROM trips WHERE id = $1::text::uuid FOR UPDATE`, tripID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
 }
 
 func scanTrip(row pgx.Row) (Trip, error) {
@@ -226,8 +239,16 @@ func apply[T any](field, patch *T) {
 }
 
 func inTransaction[T any](ctx context.Context, pool *pgxpool.Pool, work func(pgx.Tx) (T, error)) (T, error) {
+	return runTransaction(ctx, pool, pgx.TxOptions{}, work)
+}
+
+func inReadTransaction[T any](ctx context.Context, pool *pgxpool.Pool, work func(pgx.Tx) (T, error)) (T, error) {
+	return runTransaction(ctx, pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, work)
+}
+
+func runTransaction[T any](ctx context.Context, pool *pgxpool.Pool, options pgx.TxOptions, work func(pgx.Tx) (T, error)) (T, error) {
 	var result T
-	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, pool, options, func(tx pgx.Tx) error {
 		var err error
 		result, err = work(tx)
 		return err

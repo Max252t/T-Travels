@@ -26,9 +26,10 @@ type Balance struct {
 }
 
 type Suggestions struct {
-	Revision  int64      `json:"revision"`
-	Optimal   bool       `json:"optimal"`
-	Transfers []Transfer `json:"transfers"`
+	Revision        int64      `json:"revision"`
+	Optimal         bool       `json:"optimal"`
+	Transfers       []Transfer `json:"transfers"`
+	HasOpenDisputes bool       `json:"has_open_disputes"`
 }
 
 type Settlement struct {
@@ -39,44 +40,39 @@ type Settlement struct {
 }
 
 type SettlementInput struct {
-	ToUserID string `json:"to_user_id"`
-	Amount   int64  `json:"amount"`
-	Revision int64  `json:"revision"`
+	ToUserID            string `json:"to_user_id"`
+	Amount              int64  `json:"amount"`
+	Revision            int64  `json:"revision"`
+	AcknowledgeDisputes bool   `json:"acknowledge_disputes,omitempty"`
 }
 
 func (s *Service) Balances(ctx context.Context, userID, tripID string) ([]Balance, error) {
-	var balances []Balance
-	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Balance, error) {
 		if _, err := financialRevision(ctx, tx, userID, tripID); err != nil {
-			return err
+			return nil, err
 		}
-		var err error
-		balances, err = readBalances(ctx, tx, tripID)
-		return err
+		return readBalances(ctx, tx, tripID)
 	})
-	return balances, err
 }
 
 func (s *Service) SettlementSuggestions(ctx context.Context, userID, tripID string) (Suggestions, error) {
-	var result Suggestions
-	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
-		var err error
-		result, err = readSuggestions(ctx, tx, userID, tripID)
-		return err
+	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) (Suggestions, error) {
+		return readSuggestions(ctx, tx, userID, tripID)
 	})
-	return result, err
 }
 
 func (s *Service) ListSettlements(ctx context.Context, userID, tripID string, limit, offset int32) ([]Settlement, error) {
-	if _, err := financialRevision(ctx, s.pool, userID, tripID); err != nil {
-		return nil, err
-	}
-	rows, err := s.pool.Query(ctx, `SELECT id::text, trip_id::text, from_user_id::text, to_user_id::text, amount, created_at
-		FROM settlements WHERE trip_id = $1::text::uuid ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, tripID, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Settlement, error) { return scanSettlement(row) })
+	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Settlement, error) {
+		if _, err := financialRevision(ctx, tx, userID, tripID); err != nil {
+			return nil, err
+		}
+		rows, err := tx.Query(ctx, `SELECT id::text, trip_id::text, from_user_id::text, to_user_id::text, amount, created_at
+			FROM settlements WHERE trip_id = $1::text::uuid ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, tripID, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Settlement, error) { return scanSettlement(row) })
+	})
 }
 
 func (s *Service) CreateSettlement(ctx context.Context, userID, tripID, key string, input SettlementInput) (Settlement, error) {
@@ -99,6 +95,9 @@ func (s *Service) CreateSettlement(ctx context.Context, userID, tripID, key stri
 			}
 			if suggestions.Revision != input.Revision {
 				return Settlement{}, ErrSettlementRevision
+			}
+			if suggestions.HasOpenDisputes && !input.AcknowledgeDisputes {
+				return Settlement{}, ErrDisputeAcknowledgement
 			}
 			if !permitsTransfer(suggestions.Transfers, userID, to, input.Amount) {
 				return Settlement{}, ErrSettlementUnavailable
@@ -151,7 +150,10 @@ func readSuggestions(ctx context.Context, tx pgx.Tx, userID, tripID string) (Sug
 	if transfers == nil {
 		return Suggestions{}, errUnbalancedLedger
 	}
-	return Suggestions{Revision: revision, Optimal: optimal, Transfers: transfers}, nil
+	var open bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM expense_disputes
+		WHERE trip_id = $1::text::uuid AND resolved_at IS NULL)`, tripID).Scan(&open)
+	return Suggestions{Revision: revision, Optimal: optimal, Transfers: transfers, HasOpenDisputes: open}, err
 }
 
 func readBalances(ctx context.Context, tx pgx.Tx, tripID string) ([]Balance, error) {

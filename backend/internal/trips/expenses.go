@@ -42,7 +42,8 @@ type Expense struct {
 	CreatedBy string `json:"created_by"`
 	Version   int64  `json:"version"`
 	ExpenseData
-	Participants []Share `json:"participants"`
+	Participants []Share         `json:"participants"`
+	Dispute      *ExpenseDispute `json:"dispute,omitempty"`
 }
 
 type ExpensePatch struct {
@@ -61,26 +62,33 @@ type ExpensePatch struct {
 const expenseFields = `e.id::text, e.trip_id::text, e.created_by::text, e.version, e.title, e.amount,
 	e.category, e.payer_id::text, e.split_type, e.expense_date, e.description,
 	(SELECT jsonb_agg(jsonb_build_object('user_id', p.user_id, 'amount', p.amount, 'basis_points', p.basis_points)
-		ORDER BY p.user_id) FROM expense_splits p WHERE p.expense_id = e.id)`
+		ORDER BY p.user_id) FROM expense_splits p WHERE p.expense_id = e.id),
+	(SELECT jsonb_build_object('id', d.id, 'expense_id', d.expense_id, 'created_by', d.created_by,
+		'reason', d.reason, 'created_at', d.created_at, 'resolved_at', d.resolved_at)
+		FROM expense_disputes d WHERE d.expense_id = e.id AND d.resolved_at IS NULL)`
 
 func (s *Service) ListExpenses(ctx context.Context, userID, tripID string, limit, offset int32) ([]Expense, error) {
-	if _, err := s.Get(ctx, userID, tripID); err != nil {
-		return nil, err
-	}
-	rows, err := s.pool.Query(ctx, `SELECT `+expenseFields+` FROM expenses e
-		WHERE e.trip_id = $1::text::uuid AND e.deleted_at IS NULL
-		ORDER BY e.expense_date DESC, e.id DESC LIMIT $2 OFFSET $3`, tripID, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Expense, error) { return scanExpense(row) })
+	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Expense, error) {
+		if _, err := getTrip(ctx, tx, userID, tripID, false); err != nil {
+			return nil, err
+		}
+		rows, err := tx.Query(ctx, `SELECT `+expenseFields+` FROM expenses e
+			WHERE e.trip_id = $1::text::uuid AND e.deleted_at IS NULL
+			ORDER BY e.expense_date DESC, e.id DESC LIMIT $2 OFFSET $3`, tripID, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Expense, error) { return scanExpense(row) })
+	})
 }
 
 func (s *Service) GetExpense(ctx context.Context, userID, tripID, expenseID string) (Expense, error) {
-	if _, err := s.Get(ctx, userID, tripID); err != nil {
-		return Expense{}, err
-	}
-	return getExpense(ctx, s.pool, tripID, expenseID)
+	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) (Expense, error) {
+		if _, err := getTrip(ctx, tx, userID, tripID, false); err != nil {
+			return Expense{}, err
+		}
+		return getExpense(ctx, tx, tripID, expenseID)
+	})
 }
 
 func (s *Service) CreateExpense(ctx context.Context, userID, tripID, key string, input ExpenseInput) (Expense, error) {
@@ -197,6 +205,12 @@ func (s *Service) UpdateExpense(ctx context.Context, userID, tripID, expenseID, 
 					return Expense{}, err
 				}
 			}
+			if recalculate || newData.PayerID != expense.PayerID {
+				changed := &Expense{ExpenseData: newData, Participants: shares}
+				if err := checkInactiveBalances(ctx, tx, tripID, expense, changed); err != nil {
+					return Expense{}, err
+				}
+			}
 			if newData.Amount != expense.Amount {
 				if err := validateExpenseTotal(ctx, tx, tripID, expenseID, newData.Amount); err != nil {
 					return Expense{}, err
@@ -252,6 +266,16 @@ func (s *Service) DeleteExpense(ctx context.Context, userID, tripID, expenseID, 
 			if storedVersion != version {
 				return false, ErrExpenseVersion
 			}
+			expense, err := getExpense(ctx, tx, tripID, expenseID)
+			if err != nil {
+				return false, err
+			}
+			if expense.Dispute != nil {
+				return false, ErrOpenDispute
+			}
+			if err := checkInactiveBalances(ctx, tx, tripID, expense, nil); err != nil {
+				return false, err
+			}
 			if _, err := tx.Exec(ctx, `UPDATE expenses SET deleted_at = now(), version = version + 1 WHERE id = $1::text::uuid`, expenseID); err != nil {
 				return false, err
 			}
@@ -295,9 +319,12 @@ func scanExpense(row pgx.Row) (Expense, error) {
 	var expense Expense
 	var date time.Time
 	err := row.Scan(&expense.ID, &expense.TripID, &expense.CreatedBy, &expense.Version, &expense.Title, &expense.Amount,
-		&expense.Category, &expense.PayerID, &expense.SplitType, &date, &expense.Description, &expense.Participants)
+		&expense.Category, &expense.PayerID, &expense.SplitType, &date, &expense.Description, &expense.Participants, &expense.Dispute)
 	if err == nil {
 		expense.Date = date.Format(time.DateOnly)
+		if expense.Dispute != nil {
+			expense.Dispute.CreatedAt = expense.Dispute.CreatedAt.UTC()
+		}
 	}
 	return expense, err
 }

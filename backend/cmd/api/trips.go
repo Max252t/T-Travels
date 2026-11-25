@@ -27,6 +27,8 @@ func registerTripRoutes(api *gin.RouterGroup, service *trips.Service) {
 	api.GET("/trips/:tripId", h.get)
 	api.PATCH("/trips/:tripId", h.update)
 	api.GET("/trips/:tripId/members", h.members)
+	api.DELETE("/trips/:tripId/members/:userId", h.removeMember)
+	api.POST("/trips/:tripId/leave", h.leaveTrip)
 	api.POST("/trips/:tripId/invitations", h.invite)
 	api.GET("/trips/:tripId/budget", h.tripBudget)
 	api.GET("/trips/:tripId/expenses", h.listExpenses)
@@ -34,6 +36,8 @@ func registerTripRoutes(api *gin.RouterGroup, service *trips.Service) {
 	api.GET("/trips/:tripId/expenses/:expenseId", h.getExpense)
 	api.PATCH("/trips/:tripId/expenses/:expenseId", h.updateExpense)
 	api.DELETE("/trips/:tripId/expenses/:expenseId", h.deleteExpense)
+	api.POST("/trips/:tripId/expenses/:expenseId/dispute", h.openDispute)
+	api.POST("/trips/:tripId/expenses/:expenseId/dispute/resolve", h.resolveDispute)
 	api.GET("/trips/:tripId/balances", h.balances)
 	api.GET("/trips/:tripId/settlements/suggestions", h.settlementSuggestions)
 	api.GET("/trips/:tripId/settlements", h.listSettlements)
@@ -278,6 +282,26 @@ func writeTripResult(c *gin.Context, status int, result any, err error) {
 		writeAPIError(c, http.StatusConflict, "SETTLEMENT_REVISION_CONFLICT", "Обновите рекомендации переводов")
 	case errors.Is(err, trips.ErrSettlementUnavailable):
 		writeAPIError(c, http.StatusConflict, "SETTLEMENT_UNAVAILABLE", "Этот перевод или сумма отсутствуют в текущих рекомендациях")
+	case errors.Is(err, trips.ErrInvalidDispute):
+		writeAPIError(c, http.StatusBadRequest, "INVALID_DISPUTE", "Укажите причину спора длиной от 1 до 1000 символов")
+	case errors.Is(err, trips.ErrOpenDispute):
+		writeAPIError(c, http.StatusConflict, "EXPENSE_DISPUTE_OPEN", "У расхода уже есть открытый спор")
+	case errors.Is(err, trips.ErrNoDispute):
+		writeAPIError(c, http.StatusNotFound, "DISPUTE_NOT_FOUND", "Открытый спор не найден")
+	case errors.Is(err, trips.ErrDisputeAuthor):
+		writeAPIError(c, http.StatusForbidden, "DISPUTE_AUTHOR_REQUIRED", "Закрыть спор может его инициатор")
+	case errors.Is(err, trips.ErrDisputeAcknowledgement):
+		writeAPIError(c, http.StatusConflict, "DISPUTE_ACKNOWLEDGEMENT_REQUIRED", "Подтвердите перевод с открытыми спорами")
+	case errors.Is(err, trips.ErrMemberNotFound):
+		writeAPIError(c, http.StatusNotFound, "MEMBER_NOT_FOUND", "Участник поездки не найден")
+	case errors.Is(err, trips.ErrOwnerDeparture):
+		writeAPIError(c, http.StatusConflict, "TRIP_OWNER_REQUIRED", "Организатор должен остаться участником поездки")
+	case errors.Is(err, trips.ErrMemberBalance):
+		writeAPIError(c, http.StatusConflict, "NONZERO_MEMBER_BALANCE", "Сначала погасите баланс участника")
+	case errors.Is(err, trips.ErrMemberDisputes):
+		writeAPIError(c, http.StatusConflict, "MEMBER_DISPUTE_OPEN", "Участник должен закрыть свои открытые споры")
+	case errors.Is(err, trips.ErrInactiveBalance):
+		writeAPIError(c, http.StatusConflict, "INACTIVE_MEMBER_BALANCE", "Изменение затронет баланс бывшего участника")
 	case errors.Is(err, idempotency.ErrKeyReused):
 		writeAPIError(c, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Ключ уже использован для другого запроса")
 	case errors.Is(err, trips.ErrRateLimit):
