@@ -9,6 +9,10 @@ go run ./cmd/api
 
 `GET http://127.0.0.1:8080/healthz` возвращает `200 OK` и `{"status":"ok"}`. Адрес сервера задаётся переменной окружения `HTTP_ADDR`.
 
+## OpenAPI
+
+Контракт хранится в [api/swagger.yaml](api/swagger.yaml) в формате OpenAPI 3.0.3. Запущенный сервер отдаёт его по адресу `http://127.0.0.1:8080/openapi.yaml`. Проверка `go test ./...` валидирует схему и сверяет с ней ответ `/healthz`.
+
 ## Ветки и CI
 
 Новые ветки `feature/*` и `fix/*` создаются от `develop`. Изменения попадают в `develop` через pull request. Готовую версию переносим из `develop` в `main`.
