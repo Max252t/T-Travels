@@ -1,0 +1,25 @@
+openapi: 3.0.3
+info:
+  title: Т-Путешествия
+  version: 0.1.0
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Проверить доступность HTTP-сервера
+      responses:
+        '200':
+          description: HTTP-сервер отвечает
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
