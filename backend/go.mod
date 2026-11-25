@@ -5,8 +5,10 @@ go 1.27.0
 require (
 	github.com/getkin/kin-openapi v0.150.0
 	github.com/gin-gonic/gin v1.12.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.13.0
 	golang.org/x/crypto v0.48.0
+	golang.org/x/time v0.16.0
 )
 
 require (

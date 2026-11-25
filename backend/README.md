@@ -1,9 +1,10 @@
 # Бэкенд Т-Путешествий
 
-Для локального запуска нужны Go 1.27 или новее и подготовленная база PostgreSQL. После запуска базы и применения миграций задайте `DATABASE_URL` и запустите сервер из папки `backend`. Пример для PowerShell со значениями из `.env.example`
+Для локального запуска нужны Go 1.27 или новее и подготовленная база PostgreSQL. После запуска базы и применения миграций задайте `DATABASE_URL` и `JWT_SECRET`, затем запустите сервер из папки `backend`. Используйте случайный секрет длиной не менее 32 байт и сохраняйте его между перезапусками. Пример для PowerShell со значениями базы из `.env.example`
 
 ```powershell
 $env:DATABASE_URL = 'postgres://t_travels:local_dev_password@127.0.0.1:5432/t_travels?sslmode=disable'
+$env:JWT_SECRET = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 go run ./cmd/api
 ```
 
@@ -28,12 +29,16 @@ docker compose run --rm migrate version
 
 Миграция `000001` создаёт таблицы `users` и `refresh_sessions`. Email уникален без учёта регистра. Таблицы предназначены для хранения хешей паролей и refresh-токенов.
 
-## Регистрация
+## Авторизация
 
 `POST /api/v1/auth/register` принимает JSON с полями `email`, `password` и `name`. Пароль должен содержать от 15 до 128 символов. Ответ `201` содержит UUID, email и имя пользователя. При повторной регистрации с тем же email сервер возвращает `409`.
+
+`POST /api/v1/auth/login` принимает `email` и `password` и выдаёт JWT на 15 минут и refresh-токен для сессии на 30 дней. `POST /api/v1/auth/refresh` принимает `refresh_token` и заменяет оба токена. Общий срок сессии отсчитывается от входа. Если ответ обновления потерян после успешной ротации, требуется повторный вход.
+
+`POST /api/v1/auth/logout` принимает текущий `refresh_token` и отзывает сессию. Уже выданный JWT действует до истечения своего срока.
 
 ## Ветки и CI
 
 Новые ветки `feature/*` и `fix/*` создаются от `develop`. Изменения попадают в `develop` через pull request. Готовую версию переносим из `develop` в `main`.
 
-GitHub Actions проверяет форматирование, тесты, `go vet`, сборку, миграции и регистрацию на тестовой PostgreSQL при изменениях бэкенда в `main` и `develop`, а также в pull request в эти ветки.
+GitHub Actions проверяет форматирование, тесты, `go vet`, сборку, миграции, регистрацию и сессии на тестовой PostgreSQL при изменениях бэкенда в `main` и `develop`, а также в pull request в эти ветки.

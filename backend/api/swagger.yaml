@@ -73,7 +73,141 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/auth/login:
+    post:
+      operationId: loginUser
+      summary: Войти по email и паролю
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AuthTokens'
+        '400':
+          $ref: '#/components/responses/AuthBadRequest'
+        '401':
+          description: Неверный email или пароль (`INVALID_CREDENTIALS`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
+        '429':
+          description: Временно превышен лимит входов (`AUTH_BUSY`)
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          $ref: '#/components/responses/AuthInternalError'
+  /api/v1/auth/refresh:
+    post:
+      operationId: refreshSession
+      summary: Обновить токены
+      description: Успешный запрос выдаёт новый refresh-токен и делает предыдущий недействительным.
+      requestBody:
+        $ref: '#/components/requestBodies/RefreshToken'
+      responses:
+        '200':
+          $ref: '#/components/responses/AuthTokens'
+        '400':
+          $ref: '#/components/responses/AuthBadRequest'
+        '401':
+          $ref: '#/components/responses/AuthInvalidRefresh'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
+        '500':
+          $ref: '#/components/responses/AuthInternalError'
+  /api/v1/auth/logout:
+    post:
+      operationId: logoutSession
+      summary: Отозвать refresh-сессию
+      description: Выданный access-токен действует до истечения своего срока.
+      requestBody:
+        $ref: '#/components/requestBodies/RefreshToken'
+      responses:
+        '204':
+          description: Сессия отозвана или уже недействительна
+        '400':
+          $ref: '#/components/responses/AuthBadRequest'
+        '401':
+          $ref: '#/components/responses/AuthInvalidRefresh'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
+        '500':
+          $ref: '#/components/responses/AuthInternalError'
 components:
+  requestBodies:
+    RefreshToken:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [refresh_token]
+            properties:
+              refresh_token:
+                type: string
+                minLength: 43
+                maxLength: 43
+  responses:
+    AuthTokens:
+      description: Токены сессии
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            enum: [no-store]
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AuthTokens'
+    AuthBadRequest:
+      description: Некорректный запрос (`INVALID_REQUEST`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    AuthInvalidRefresh:
+      description: Refresh-токен недействителен (`INVALID_REFRESH_TOKEN`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    AuthTooLarge:
+      description: Тело запроса больше 4 КиБ (`REQUEST_TOO_LARGE`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    AuthUnsupportedMedia:
+      description: Неподдерживаемый тип или кодировка тела (`UNSUPPORTED_MEDIA_TYPE`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    AuthInternalError:
+      description: Ошибка сервера (`INTERNAL_ERROR`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
   schemas:
     HealthResponse:
       type: object
@@ -115,6 +249,39 @@ components:
           format: email
         name:
           type: string
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          writeOnly: true
+          minLength: 15
+          maxLength: 128
+    AuthTokens:
+      type: object
+      additionalProperties: false
+      required: [access_token, refresh_token, expires_in, token_type]
+      properties:
+        access_token:
+          type: string
+          minLength: 1
+        refresh_token:
+          type: string
+          minLength: 43
+          maxLength: 43
+        expires_in:
+          type: integer
+          description: Срок действия access-токена в секундах
+          minimum: 1
+        token_type:
+          type: string
+          enum: [Bearer]
     ApiError:
       type: object
       required: [error]
