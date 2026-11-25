@@ -24,24 +24,8 @@ type registrationRequest struct {
 
 func registerUser(service *auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		mediaType, params, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
-		charset := params["charset"]
-		encodings := c.Request.Header.Values("Content-Encoding")
-		if err != nil || mediaType != "application/json" || (charset != "" && !strings.EqualFold(charset, "utf-8")) ||
-			len(encodings) > 1 || (len(encodings) == 1 && !strings.EqualFold(encodings[0], "identity")) {
-			writeAPIError(c, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Ожидается JSON в UTF-8 без сжатия")
-			return
-		}
-
-		body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10))
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeAPIError(c, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "Размер запроса превышает 4 КиБ")
-			return
-		}
-		var request *registrationRequest
-		if err != nil || json.Unmarshal(body, &request, json.RejectUnknownMembers(true)) != nil || request == nil {
-			writeAPIError(c, http.StatusBadRequest, "INVALID_REQUEST", "Некорректное тело запроса")
+		request := decodeAuthRequest[registrationRequest](c)
+		if request == nil {
 			return
 		}
 
@@ -64,6 +48,29 @@ func registerUser(service *auth.Service) gin.HandlerFunc {
 			writeAPIError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Не удалось зарегистрировать пользователя")
 		}
 	}
+}
+
+func decodeAuthRequest[T any](c *gin.Context) *T {
+	mediaType, params, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	charset := params["charset"]
+	encodings := c.Request.Header.Values("Content-Encoding")
+	if err != nil || mediaType != "application/json" || (charset != "" && !strings.EqualFold(charset, "utf-8")) ||
+		len(encodings) > 1 || (len(encodings) == 1 && !strings.EqualFold(encodings[0], "identity")) {
+		writeAPIError(c, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Ожидается JSON в UTF-8 без сжатия")
+		return nil
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10))
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeAPIError(c, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "Размер запроса превышает 4 КиБ")
+		return nil
+	}
+	var request *T
+	if err != nil || json.Unmarshal(body, &request, json.RejectUnknownMembers(true)) != nil || request == nil {
+		writeAPIError(c, http.StatusBadRequest, "INVALID_REQUEST", "Некорректное тело запроса")
+		return nil
+	}
+	return request
 }
 
 func writeAPIError(c *gin.Context, status int, code, message string) {

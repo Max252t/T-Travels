@@ -22,6 +22,10 @@ func main() {
 }
 
 func run() error {
+	jwtKey := []byte(os.Getenv("JWT_SECRET"))
+	if len(jwtKey) < 32 {
+		return errors.New("JWT_SECRET must be at least 32 bytes")
+	}
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		return errors.New("DATABASE_URL is required")
@@ -44,7 +48,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           newRouter(auth.NewService(pool)),
+		Handler:           newRouter(auth.NewService(pool, jwtKey)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 	}
@@ -61,6 +65,10 @@ func newRouter(authService *auth.Service) *gin.Engine {
 	router.GET("/openapi.yaml", func(c *gin.Context) {
 		c.Data(http.StatusOK, "application/yaml", []byte(api.Swagger))
 	})
-	router.POST("/api/v1/auth/register", registerUser(authService))
+	authRoutes := router.Group("/api/v1/auth")
+	authRoutes.POST("/register", registerUser(authService))
+	authRoutes.POST("/login", loginUser(authService))
+	authRoutes.POST("/refresh", refreshSession(authService))
+	authRoutes.POST("/logout", logoutSession(authService))
 	return router
 }
