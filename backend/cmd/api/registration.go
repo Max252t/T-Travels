@@ -51,6 +51,10 @@ func registerUser(service *auth.Service) gin.HandlerFunc {
 }
 
 func decodeJSONRequest[T any](c *gin.Context) *T {
+	return decodeJSONRequestLimit[T](c, 4<<10)
+}
+
+func decodeJSONRequestLimit[T any](c *gin.Context, limit int64) *T {
 	mediaType, params, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
 	charset := params["charset"]
 	encodings := c.Request.Header.Values("Content-Encoding")
@@ -59,10 +63,10 @@ func decodeJSONRequest[T any](c *gin.Context) *T {
 		writeAPIError(c, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Ожидается JSON в UTF-8 без сжатия")
 		return nil
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10))
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, limit))
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		writeAPIError(c, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "Размер запроса превышает 4 КиБ")
+		writeAPIError(c, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", fmt.Sprintf("Размер запроса превышает %d КиБ", limit>>10))
 		return nil
 	}
 	var request *T

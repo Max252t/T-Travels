@@ -28,6 +28,12 @@ func registerTripRoutes(api *gin.RouterGroup, service *trips.Service) {
 	api.PATCH("/trips/:tripId", h.update)
 	api.GET("/trips/:tripId/members", h.members)
 	api.POST("/trips/:tripId/invitations", h.invite)
+	api.GET("/trips/:tripId/budget", h.tripBudget)
+	api.GET("/trips/:tripId/expenses", h.listExpenses)
+	api.POST("/trips/:tripId/expenses", h.createExpense)
+	api.GET("/trips/:tripId/expenses/:expenseId", h.getExpense)
+	api.PATCH("/trips/:tripId/expenses/:expenseId", h.updateExpense)
+	api.DELETE("/trips/:tripId/expenses/:expenseId", h.deleteExpense)
 	api.GET("/notifications", h.notifications)
 	api.PATCH("/notifications/:notificationId/read", h.readNotification)
 	api.POST("/notifications/read-all", h.readAllNotifications)
@@ -40,7 +46,7 @@ func (f *nonNull[T]) UnmarshalJSON(raw []byte) error {
 		return trips.ErrInvalid
 	}
 	var value T
-	if err := json.Unmarshal(raw, &value); err != nil {
+	if err := json.Unmarshal(raw, &value, json.RejectUnknownMembers(true)); err != nil {
 		return err
 	}
 	f.value = &value
@@ -252,6 +258,16 @@ func writeTripResult(c *gin.Context, status int, result any, err error) {
 		writeAPIError(c, http.StatusNotFound, "INVITATION_NOT_FOUND", "Приглашение недействительно или истекло")
 	case errors.Is(err, trips.ErrVersion):
 		writeAPIError(c, http.StatusConflict, "VERSION_CONFLICT", "Поездка уже была изменена")
+	case errors.Is(err, trips.ErrInvalidExpense):
+		writeAPIError(c, http.StatusBadRequest, "INVALID_EXPENSE", "Проверьте параметры расхода и доли участников")
+	case errors.Is(err, trips.ErrExpenseNotFound):
+		writeAPIError(c, http.StatusNotFound, "EXPENSE_NOT_FOUND", "Расход не найден")
+	case errors.Is(err, trips.ErrExpenseForbidden):
+		writeAPIError(c, http.StatusForbidden, "EXPENSE_EDITOR_REQUIRED", "Изменить расход может его автор или организатор")
+	case errors.Is(err, trips.ErrExpenseVersion):
+		writeAPIError(c, http.StatusConflict, "VERSION_CONFLICT", "Расход уже был изменён")
+	case errors.Is(err, trips.ErrExpenseLimit):
+		writeAPIError(c, http.StatusConflict, "EXPENSE_LIMIT_EXCEEDED", "Сумма расходов поездки превышает допустимый предел")
 	case errors.Is(err, idempotency.ErrKeyReused):
 		writeAPIError(c, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Ключ уже использован для другого запроса")
 	case errors.Is(err, trips.ErrRateLimit):

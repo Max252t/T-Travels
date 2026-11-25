@@ -31,7 +31,7 @@ func TestTripsPostgres(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for _, table := range []string{"notifications", "invitations", "trip_members"} {
+		for _, table := range []string{"notifications", "invitations", "expense_splits", "expenses", "trip_members"} {
 			if _, err := pool.Exec(ctx, "DELETE FROM "+table+" WHERE trip_id = ANY($1::text[]::uuid[])", tripIDs); err != nil {
 				t.Errorf("could not clean up %s: %v", table, err)
 			}
@@ -179,4 +179,82 @@ func TestTripsPostgres(t *testing.T) {
 	if len(notifications) != 1 || notifications[0].ReadAt == nil {
 		t.Fatal("notification was not marked read")
 	}
+
+	expensesPath := path + "/expenses"
+	budgetPath := path + "/budget"
+	check(call("GET", budgetPath, outsider, 0, ""), 404)
+	check(call("GET", expensesPath, outsider, 0, ""), 404)
+	checkBudget := func(spent, remaining int64) {
+		t.Helper()
+		var budget trips.Budget
+		decode(check(call("GET", budgetPath, member, 0, ""), 200), &budget)
+		if budget.Budget != 0 || budget.Spent != spent || budget.Remaining != remaining || budget.Currency != "RUB" {
+			t.Fatalf("incorrect budget: %+v", budget)
+		}
+	}
+	checkBudget(0, 0)
+	expenseBody := fmt.Sprintf(`{"title":"Обед","amount":101,"category":"food","payer_id":%q,"split_type":"equal","participants":[{"user_id":%q}],"date":"2026-12-10","description":"Чек позже"}`, users[0], users[1])
+	check(call("POST", expensesPath, owner, 5, strings.Replace(expenseBody, users[1], users[2], 1)), 400)
+	for range 2 {
+		go func() { concurrent <- call("POST", expensesPath, owner, 5, expenseBody) }()
+	}
+	var expense trips.Expense
+	createdExpense := string(check(<-concurrent, 201))
+	decode([]byte(createdExpense), &expense)
+	if string(check(<-concurrent, 201)) != createdExpense || expense.PayerID != users[0] || expense.CreatedBy != users[0] ||
+		expense.Version != 1 || len(expense.Participants) != 1 || expense.Participants[0].UserID != users[1] || expense.Participants[0].Amount != 101 {
+		t.Fatal("expense creation failed to preserve the payer or shares on retry")
+	}
+	checkBudget(101, -101)
+	check(call("POST", expensesPath, owner, 6, strings.Replace(expenseBody, "101", "1000000000000", 1)), 409)
+	expensePath := expensesPath + "/" + expense.ID
+	check(call("GET", expensePath, outsider, 0, ""), 404)
+	if string(check(call("GET", expensePath, member, 0, ""), 200)) != createdExpense {
+		t.Fatal("stored expense changed")
+	}
+	check(call("PATCH", expensePath, member, 3, `{"version":1,"amount":115}`), 403)
+	patchExpense := fmt.Sprintf(`{"version":1,"amount":115,"split_type":"exact","participants":[{"user_id":%q,"amount":115}],"description":null}`, users[1])
+	updatedExpense := string(check(call("PATCH", expensePath, owner, 6, patchExpense), 200))
+	decode([]byte(updatedExpense), &expense)
+	if expense.Version != 2 || expense.Description != nil || len(expense.Participants) != 1 || expense.Participants[0].Amount != 115 ||
+		string(check(call("PATCH", expensePath, owner, 6, patchExpense), 200)) != updatedExpense {
+		t.Fatal("expense update was not atomic and idempotent")
+	}
+	check(call("PATCH", expensePath, owner, 7, `{"version":2,"amount":116}`), 400)
+	check(call("PATCH", expensePath, owner, 7, `{"version":1,"amount":116}`), 409)
+	checkBudget(115, -115)
+	check(call("DELETE", expensePath+"?version=1", owner, 7, ""), 409)
+	check(call("DELETE", expensePath+"?version=2", owner, 7, ""), 204)
+	check(call("DELETE", expensePath+"?version=2", owner, 7, ""), 204)
+	check(call("GET", expensePath, member, 0, ""), 404)
+	if string(check(call("GET", expensesPath, member, 0, ""), 200)) != "[]" {
+		t.Fatal("deleted expense was listed")
+	}
+	checkBudget(0, 0)
+	decode(check(call("GET", "/notifications", member, 0, ""), 200), &notifications)
+	if len(notifications) != 3 {
+		t.Fatalf("expected one notification per expense change, got %d", len(notifications))
+	}
+	for _, event := range notifications {
+		if event.ExpenseID == nil || *event.ExpenseID != expense.ID {
+			t.Fatal("notification refers to a different expense")
+		}
+	}
+	percentageBody := fmt.Sprintf(`{"title":"Такси","amount":8,"category":"transport","payer_id":%q,"split_type":"percentage","participants":[{"user_id":%q,"basis_points":7500},{"user_id":%q,"basis_points":2500}],"date":"2026-12-11"}`, users[0], users[0], users[1])
+	decode(check(call("POST", expensesPath, member, 3, percentageBody), 201), &expense)
+	if expense.CreatedBy != users[1] || expense.PayerID != users[0] {
+		t.Fatal("payer and creator should be independent")
+	}
+	percentagePath := expensesPath + "/" + expense.ID
+	decode(check(call("PATCH", percentagePath, member, 4, `{"version":1,"amount":12}`), 200), &expense)
+	wantShares := map[string]int64{users[0]: 9, users[1]: 3}
+	for _, share := range expense.Participants {
+		if share.Amount != wantShares[share.UserID] || share.BasisPoints == nil {
+			t.Fatal("percentage shares were not recalculated using stored basis points")
+		}
+	}
+	if len(expense.Participants) != 2 {
+		t.Fatal("percentage split changed the participant list")
+	}
+	checkBudget(12, -12)
 }
