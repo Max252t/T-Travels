@@ -186,7 +186,317 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/trips:
+    get:
+      operationId: listTrips
+      summary: Мои поездки
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Поездки пользователя
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+    post:
+      operationId: createTrip
+      summary: Создать поездку
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripCreate'
+      responses:
+        '201':
+          description: Поездка создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '409':
+          $ref: '#/components/responses/TripConflict'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}:
+    get:
+      operationId: getTrip
+      summary: Получить поездку
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+      responses:
+        '200':
+          description: Поездка
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+    patch:
+      operationId: updateTrip
+      summary: Изменить поездку и бюджет
+      description: Передайте текущую версию и хотя бы одно изменяемое поле.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripPatch'
+      responses:
+        '200':
+          description: Поездка обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '403':
+          $ref: '#/components/responses/TripForbidden'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/TripConflict'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/members:
+    get:
+      operationId: listTripMembers
+      summary: Получить участников поездки
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Участники поездки
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TripMember'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/invitations:
+    post:
+      operationId: createTripInvitation
+      summary: Выдать код приглашения
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Приглашение действует семь дней
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripInvitation'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '403':
+          $ref: '#/components/responses/TripForbidden'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/TripConflict'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/join:
+    post:
+      operationId: joinTrip
+      summary: Присоединиться по коду
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripJoin'
+      responses:
+        '200':
+          description: Поездка участника
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/InvitationNotFound'
+        '409':
+          $ref: '#/components/responses/TripConflict'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
+        '429':
+          $ref: '#/components/responses/JoinRateLimited'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/notifications:
+    get:
+      operationId: listNotifications
+      summary: Получить свои уведомления
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Уведомления пользователя
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/notifications/{notificationId}/read:
+    patch:
+      operationId: readNotification
+      summary: Отметить уведомление прочитанным
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '204':
+          description: Уведомление отмечено
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/NotificationNotFound'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/notifications/read-all:
+    post:
+      operationId: readAllNotifications
+      summary: Отметить все уведомления прочитанными
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: Уведомления отмечены
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '409':
+          $ref: '#/components/responses/TripConflict'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
 components:
+  parameters:
+    TripId:
+      in: path
+      name: tripId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    NotificationId:
+      in: path
+      name: notificationId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      description: UUID логической операции. При повторе запроса сохраняйте прежние ключ и значения.
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      in: query
+      name: limit
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Offset:
+      in: query
+      name: offset
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 2147483647
+        default: 0
   securitySchemes:
     bearerAuth:
       type: http
@@ -248,7 +558,224 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
+    TripBadRequest:
+      description: Некорректный запрос (`INVALID_REQUEST` или `INVALID_IDEMPOTENCY_KEY`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    TripUnauthorized:
+      description: Требуется действующий access-токен (`INVALID_ACCESS_TOKEN`)
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            enum: [Bearer]
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    TripForbidden:
+      description: Действие доступно организатору (`OWNER_REQUIRED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    TripNotFound:
+      description: Поездка не найдена или недоступна (`TRIP_NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    InvitationNotFound:
+      description: Приглашение недействительно или истекло (`INVITATION_NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    NotificationNotFound:
+      description: Уведомление не найдено (`NOTIFICATION_NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    TripConflict:
+      description: Конфликт версии поездки или ключа (`VERSION_CONFLICT` или `IDEMPOTENCY_KEY_REUSED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    JoinRateLimited:
+      description: Ограничение частоты присоединения (`JOIN_BUSY`)
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    TripInternalError:
+      description: Ошибка сервера (`INTERNAL_ERROR`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
   schemas:
+    TripCreate:
+      type: object
+      additionalProperties: false
+      required: [name, destination, start_date, end_date, budget]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        destination:
+          type: string
+          minLength: 1
+          maxLength: 150
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        budget:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 1000000000000
+          description: Бюджет в копейках.
+    TripPatch:
+      type: object
+      additionalProperties: false
+      required: [version]
+      minProperties: 2
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        destination:
+          type: string
+          minLength: 1
+          maxLength: 150
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        budget:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 1000000000000
+          description: Бюджет в копейках.
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+    Trip:
+      type: object
+      additionalProperties: false
+      required: [id, name, destination, start_date, end_date, budget, currency, version, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        destination:
+          type: string
+          minLength: 1
+          maxLength: 150
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        budget:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 1000000000000
+          description: Бюджет в копейках.
+        currency:
+          type: string
+          enum: [RUB]
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        role:
+          type: string
+          enum: [owner, member]
+    TripMember:
+      type: object
+      additionalProperties: false
+      required: [user_id, name, role]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+          enum: [owner, member]
+    TripInvitation:
+      type: object
+      additionalProperties: false
+      required: [id, code, expires_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          pattern: '^[A-Z2-7]{26}$'
+        expires_at:
+          type: string
+          format: date-time
+    TripJoin:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: Код из 26 символов, регистр не учитывается.
+          minLength: 1
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, trip_id, actor_id, event_type, created_at, read_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        trip_id:
+          type: string
+          format: uuid
+        actor_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum: [member_joined]
+        created_at:
+          type: string
+          format: date-time
+        read_at:
+          type: string
+          format: date-time
+          nullable: true
     HealthResponse:
       type: object
       required: [status]

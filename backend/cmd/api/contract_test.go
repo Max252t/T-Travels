@@ -12,7 +12,7 @@ import (
 )
 
 func TestHealthContract(t *testing.T) {
-	router := newRouter(nil)
+	router := newRouter(nil, nil)
 	contract := loadContract(t, router)
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()

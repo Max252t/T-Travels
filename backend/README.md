@@ -39,6 +39,14 @@ docker compose run --rm migrate version
 
 `GET /api/v1/users/me` возвращает `id`, `email` и `name` текущего пользователя. Передайте access-токен в заголовке `Authorization: Bearer <access_token>`.
 
+## Поездки и приглашения
+
+Организатор создаёт поездку через `POST /api/v1/trips`, редактирует её с текущей `version` через `PATCH /api/v1/trips/{tripId}` и выпускает семидневный код через `POST /api/v1/trips/{tripId}/invitations`. Бюджет указывается целым числом копеек в `RUB`. Пользователь вступает по коду через `POST /api/v1/trips/join`. Поездку и её участников видят только активные участники поездки.
+
+Для этих изменяющих операций передавайте `Idempotency-Key` с UUID. При сетевом повторе сохраните прежние ключ и значения запроса. Для чтения списков используются `limit` и `offset`.
+
+Действующие участники получают уведомление `member_joined` о новом участнике. `GET /api/v1/notifications` возвращает свои уведомления. Отметить их прочитанными можно по одному или все сразу. Для `POST /api/v1/notifications/read-all` также нужен `Idempotency-Key`.
+
 ## Ветки и CI
 
 Новые ветки `feature/*` и `fix/*` создаются от `develop`. Изменения попадают в `develop` через pull request. Готовую версию переносим из `develop` в `main`.

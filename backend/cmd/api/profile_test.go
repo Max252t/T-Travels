@@ -15,7 +15,7 @@ const profilePath = "/api/v1/users/me"
 
 func TestProfileRejectsInvalidAccessTokens(t *testing.T) {
 	key := []byte(rand.Text() + rand.Text())
-	api := newRouter(auth.NewService(nil, key))
+	api := newRouter(auth.NewService(nil, key), nil)
 	contract := loadContract(t, api)
 	now := time.Now()
 	validClaims := jwt.RegisteredClaims{
