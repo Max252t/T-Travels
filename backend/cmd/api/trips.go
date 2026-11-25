@@ -17,10 +17,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type tripRoutes struct{ service *trips.Service }
+type tripRoutes struct {
+	service      *trips.Service
+	receiptSlots chan struct{}
+}
 
 func registerTripRoutes(api *gin.RouterGroup, service *trips.Service) {
-	h := tripRoutes{service: service}
+	h := tripRoutes{service: service, receiptSlots: make(chan struct{}, 4)}
 	api.GET("/trips", h.list)
 	api.POST("/trips", h.create)
 	api.POST("/trips/join", h.join)
@@ -31,11 +34,15 @@ func registerTripRoutes(api *gin.RouterGroup, service *trips.Service) {
 	api.POST("/trips/:tripId/leave", h.leaveTrip)
 	api.POST("/trips/:tripId/invitations", h.invite)
 	api.GET("/trips/:tripId/budget", h.tripBudget)
+	api.GET("/trips/:tripId/sync", h.syncTrip)
 	api.GET("/trips/:tripId/expenses", h.listExpenses)
 	api.POST("/trips/:tripId/expenses", h.createExpense)
 	api.GET("/trips/:tripId/expenses/:expenseId", h.getExpense)
 	api.PATCH("/trips/:tripId/expenses/:expenseId", h.updateExpense)
 	api.DELETE("/trips/:tripId/expenses/:expenseId", h.deleteExpense)
+	api.GET("/trips/:tripId/expenses/:expenseId/receipt", h.getReceipt)
+	api.POST("/trips/:tripId/expenses/:expenseId/receipt", h.putReceipt)
+	api.DELETE("/trips/:tripId/expenses/:expenseId/receipt", h.deleteReceipt)
 	api.POST("/trips/:tripId/expenses/:expenseId/dispute", h.openDispute)
 	api.POST("/trips/:tripId/expenses/:expenseId/dispute/resolve", h.resolveDispute)
 	api.GET("/trips/:tripId/balances", h.balances)
@@ -302,6 +309,12 @@ func writeTripResult(c *gin.Context, status int, result any, err error) {
 		writeAPIError(c, http.StatusConflict, "MEMBER_DISPUTE_OPEN", "Участник должен закрыть свои открытые споры")
 	case errors.Is(err, trips.ErrInactiveBalance):
 		writeAPIError(c, http.StatusConflict, "INACTIVE_MEMBER_BALANCE", "Изменение затронет баланс бывшего участника")
+	case errors.Is(err, trips.ErrReceiptNotFound):
+		writeAPIError(c, http.StatusNotFound, "RECEIPT_NOT_FOUND", "Чек не найден")
+	case errors.Is(err, trips.ErrReceiptStorage):
+		writeAPIError(c, http.StatusServiceUnavailable, "RECEIPT_STORAGE_UNAVAILABLE", "Хранилище чеков временно недоступно")
+	case errors.Is(err, trips.ErrSnapshotLimit):
+		writeAPIError(c, http.StatusConflict, "SNAPSHOT_LIMIT_EXCEEDED", "Используйте постраничные запросы для этой поездки")
 	case errors.Is(err, idempotency.ErrKeyReused):
 		writeAPIError(c, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Ключ уже использован для другого запроса")
 	case errors.Is(err, trips.ErrRateLimit):

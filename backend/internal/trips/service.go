@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Max252t/T-Travels/backend/internal/idempotency"
+	"github.com/Max252t/T-Travels/backend/internal/receipts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/time/rate"
@@ -56,12 +57,13 @@ type Member struct {
 }
 
 type Service struct {
-	pool  *pgxpool.Pool
-	joins *rate.Limiter
+	pool     *pgxpool.Pool
+	joins    *rate.Limiter
+	receipts *receipts.Store
 }
 
-func NewService(pool *pgxpool.Pool) *Service {
-	return &Service{pool: pool, joins: rate.NewLimiter(10, 20)}
+func NewService(pool *pgxpool.Pool, receiptStore *receipts.Store) *Service {
+	return &Service{pool: pool, joins: rate.NewLimiter(10, 20), receipts: receiptStore}
 }
 
 const tripFields = `t.id::text, t.name, t.destination, t.start_date, t.end_date,
@@ -138,7 +140,7 @@ func (s *Service) Update(ctx context.Context, userID, tripID, key string, patch 
 				return Trip{}, err
 			}
 			_, err = tx.Exec(ctx, `UPDATE trips SET name = $2, destination = $3,
-				start_date = $4::text::date, end_date = $5::text::date, budget = $6, version = version + 1
+				start_date = $4::text::date, end_date = $5::text::date, budget = $6, version = version + 1, snapshot_revision = snapshot_revision + 1
 				WHERE id = $1::text::uuid`, tripID, input.Name, input.Destination, input.StartDate, input.EndDate, input.Budget)
 			if err != nil {
 				return Trip{}, err
@@ -155,18 +157,22 @@ func (s *Service) Members(ctx context.Context, userID, tripID string, limit, off
 		if _, err := getTrip(ctx, tx, userID, tripID, false); err != nil {
 			return nil, err
 		}
-		rows, err := tx.Query(ctx, `SELECT m.user_id::text, u.name, m.role
-			FROM trip_members m JOIN users u ON u.id = m.user_id
-			WHERE m.trip_id = $1::text::uuid AND m.left_at IS NULL
-			ORDER BY m.role DESC, m.joined_at, m.user_id LIMIT $2 OFFSET $3`, tripID, limit, offset)
-		if err != nil {
-			return nil, err
-		}
-		return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Member, error) {
-			var member Member
-			err := row.Scan(&member.UserID, &member.Name, &member.Role)
-			return member, err
-		})
+		return readMembers(ctx, tx, tripID, limit, offset)
+	})
+}
+
+func readMembers(ctx context.Context, tx pgx.Tx, tripID string, limit, offset int32) ([]Member, error) {
+	rows, err := tx.Query(ctx, `SELECT m.user_id::text, u.name, m.role
+		FROM trip_members m JOIN users u ON u.id = m.user_id
+		WHERE m.trip_id = $1::text::uuid AND m.left_at IS NULL
+		ORDER BY m.role DESC, m.joined_at, m.user_id LIMIT $2 OFFSET $3`, tripID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Member, error) {
+		var member Member
+		err := row.Scan(&member.UserID, &member.Name, &member.Role)
+		return member, err
 	})
 }
 

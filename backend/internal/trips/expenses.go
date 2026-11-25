@@ -44,6 +44,7 @@ type Expense struct {
 	ExpenseData
 	Participants []Share         `json:"participants"`
 	Dispute      *ExpenseDispute `json:"dispute,omitempty"`
+	Receipt      *Receipt        `json:"receipt,omitempty"`
 }
 
 type ExpensePatch struct {
@@ -65,21 +66,27 @@ const expenseFields = `e.id::text, e.trip_id::text, e.created_by::text, e.versio
 		ORDER BY p.user_id) FROM expense_splits p WHERE p.expense_id = e.id),
 	(SELECT jsonb_build_object('id', d.id, 'expense_id', d.expense_id, 'created_by', d.created_by,
 		'reason', d.reason, 'created_at', d.created_at, 'resolved_at', d.resolved_at)
-		FROM expense_disputes d WHERE d.expense_id = e.id AND d.resolved_at IS NULL)`
+		FROM expense_disputes d WHERE d.expense_id = e.id AND d.resolved_at IS NULL),
+	(SELECT jsonb_build_object('content_type', r.content_type, 'size_bytes', r.size_bytes, 'updated_at', r.updated_at)
+		FROM receipts r WHERE r.expense_id = e.id)`
 
 func (s *Service) ListExpenses(ctx context.Context, userID, tripID string, limit, offset int32) ([]Expense, error) {
 	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Expense, error) {
 		if _, err := getTrip(ctx, tx, userID, tripID, false); err != nil {
 			return nil, err
 		}
-		rows, err := tx.Query(ctx, `SELECT `+expenseFields+` FROM expenses e
-			WHERE e.trip_id = $1::text::uuid AND e.deleted_at IS NULL
-			ORDER BY e.expense_date DESC, e.id DESC LIMIT $2 OFFSET $3`, tripID, limit, offset)
-		if err != nil {
-			return nil, err
-		}
-		return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Expense, error) { return scanExpense(row) })
+		return readExpenses(ctx, tx, tripID, limit, offset)
 	})
+}
+
+func readExpenses(ctx context.Context, tx pgx.Tx, tripID string, limit, offset int32) ([]Expense, error) {
+	rows, err := tx.Query(ctx, `SELECT `+expenseFields+` FROM expenses e
+		WHERE e.trip_id = $1::text::uuid AND e.deleted_at IS NULL
+		ORDER BY e.expense_date DESC, e.id DESC LIMIT $2 OFFSET $3`, tripID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Expense, error) { return scanExpense(row) })
 }
 
 func (s *Service) GetExpense(ctx context.Context, userID, tripID, expenseID string) (Expense, error) {
@@ -279,6 +286,9 @@ func (s *Service) DeleteExpense(ctx context.Context, userID, tripID, expenseID, 
 			if _, err := tx.Exec(ctx, `UPDATE expenses SET deleted_at = now(), version = version + 1 WHERE id = $1::text::uuid`, expenseID); err != nil {
 				return false, err
 			}
+			if _, err := detachReceipt(ctx, tx, expenseID); err != nil {
+				return false, err
+			}
 			if err := bumpFinancialRevision(ctx, tx, tripID); err != nil {
 				return false, err
 			}
@@ -319,11 +329,14 @@ func scanExpense(row pgx.Row) (Expense, error) {
 	var expense Expense
 	var date time.Time
 	err := row.Scan(&expense.ID, &expense.TripID, &expense.CreatedBy, &expense.Version, &expense.Title, &expense.Amount,
-		&expense.Category, &expense.PayerID, &expense.SplitType, &date, &expense.Description, &expense.Participants, &expense.Dispute)
+		&expense.Category, &expense.PayerID, &expense.SplitType, &date, &expense.Description, &expense.Participants, &expense.Dispute, &expense.Receipt)
 	if err == nil {
 		expense.Date = date.Format(time.DateOnly)
 		if expense.Dispute != nil {
 			expense.Dispute.CreatedAt = expense.Dispute.CreatedAt.UTC()
+		}
+		if expense.Receipt != nil {
+			expense.Receipt.UpdatedAt = expense.Receipt.UpdatedAt.UTC()
 		}
 	}
 	return expense, err
@@ -338,9 +351,9 @@ func getExpense(ctx context.Context, db queryRower, tripID, id string) (Expense,
 	return expense, err
 }
 
-func requireExpenseEditor(ctx context.Context, tx pgx.Tx, userID, tripID, expenseID string) error {
+func requireExpenseEditor(ctx context.Context, db queryRower, userID, tripID, expenseID string) error {
 	var allowed bool
-	err := tx.QueryRow(ctx, `SELECT m.role = 'owner' OR e.created_by = m.user_id
+	err := db.QueryRow(ctx, `SELECT m.role = 'owner' OR e.created_by = m.user_id
 		FROM expenses e JOIN trip_members m ON m.trip_id = e.trip_id
 		WHERE m.user_id = $1::text::uuid AND m.left_at IS NULL AND e.trip_id = $2::text::uuid AND e.id = $3::text::uuid`,
 		userID, tripID, expenseID).Scan(&allowed)
