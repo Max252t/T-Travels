@@ -10,6 +10,7 @@ import (
 
 	"github.com/Max252t/T-Travels/backend/api"
 	"github.com/Max252t/T-Travels/backend/internal/auth"
+	"github.com/Max252t/T-Travels/backend/internal/receipts"
 	"github.com/Max252t/T-Travels/backend/internal/trips"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,6 +42,24 @@ func run() error {
 	if err := pool.Ping(ctx); err != nil {
 		return errors.New("could not connect to PostgreSQL")
 	}
+	store, err := newReceiptStore()
+	if err != nil {
+		return err
+	}
+	if err := store.CheckBucket(ctx, os.Getenv("RECEIPTS_S3_CREATE_BUCKET") == "1"); err != nil {
+		return err
+	}
+	tripService := trips.NewService(pool, store)
+	cleanupCtx, stopCleanup := context.WithCancel(context.Background())
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		tripService.RunReceiptCleanup(cleanupCtx)
+	}()
+	defer func() {
+		stopCleanup()
+		<-cleanupDone
+	}()
 
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
@@ -49,12 +68,24 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           newRouter(auth.NewService(pool, jwtKey), trips.NewService(pool)),
+		Handler:           newRouter(auth.NewService(pool, jwtKey), tripService),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 	}
 	slog.Info("starting HTTP server", "addr", addr)
 	return server.ListenAndServe()
+}
+
+func newReceiptStore() (*receipts.Store, error) {
+	bucket := os.Getenv("RECEIPTS_S3_BUCKET")
+	if bucket == "" {
+		bucket = "t-travels-receipts"
+	}
+	region := os.Getenv("RECEIPTS_S3_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+	return receipts.New(os.Getenv("RECEIPTS_S3_ENDPOINT"), os.Getenv("RECEIPTS_S3_ACCESS_KEY"), os.Getenv("RECEIPTS_S3_SECRET_KEY"), bucket, region)
 }
 
 func newRouter(authService *auth.Service, tripService *trips.Service) *gin.Engine {

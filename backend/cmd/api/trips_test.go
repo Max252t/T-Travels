@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Max252t/T-Travels/backend/internal/auth"
+	"github.com/Max252t/T-Travels/backend/internal/receipts"
 	"github.com/Max252t/T-Travels/backend/internal/trips"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -31,7 +37,7 @@ func TestTripsPostgres(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for _, table := range []string{"notifications", "settlements", "invitations", "expense_disputes", "expense_splits", "expenses", "trip_members"} {
+		for _, table := range []string{"notifications", "settlements", "invitations", "expense_disputes", "expense_splits", "receipts", "expenses", "trip_members"} {
 			if _, err := pool.Exec(ctx, "DELETE FROM "+table+" WHERE trip_id = ANY($1::text[]::uuid[])", tripIDs); err != nil {
 				t.Errorf("could not clean up %s: %v", table, err)
 			}
@@ -64,7 +70,20 @@ func TestTripsPostgres(t *testing.T) {
 		return tokens.AccessToken
 	}
 	owner, member, outsider := register("Организатор"), register("Участник"), register("Гость")
-	api := newRouter(authService, trips.NewService(pool))
+	storageEndpoint := os.Getenv("TEST_RECEIPTS_ENDPOINT")
+	const receiptBucket = "t-travels-test-receipts"
+	var storage *receipts.Store
+	if storageEndpoint != "" {
+		storage, err = receipts.New(storageEndpoint, os.Getenv("RECEIPTS_S3_ACCESS_KEY"), os.Getenv("RECEIPTS_S3_SECRET_KEY"), receiptBucket, "us-east-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := storage.CheckBucket(t.Context(), true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tripService := trips.NewService(pool, storage)
+	api := newRouter(authService, tripService)
 	contract := loadContract(t, api)
 	type result struct {
 		request  *http.Request
@@ -447,5 +466,145 @@ func TestTripsPostgres(t *testing.T) {
 	decode(check(call("GET", settlementsPath, owner, 0, ""), 200), &history)
 	if len(history) != 2 {
 		t.Fatal("membership changes removed transfer history")
+	}
+	syncPath := path + "/sync"
+	check(call("GET", syncPath, member, 0, ""), 404)
+	snapshot := func(wantMembers int) trips.Snapshot {
+		t.Helper()
+		var snapshot trips.Snapshot
+		decode(check(call("GET", syncPath, owner, 0, ""), 200), &snapshot)
+		if snapshot.Revision < 1 || snapshot.Trip.ID != trip.ID || len(snapshot.Members) != wantMembers ||
+			len(snapshot.Expenses) != 1 || snapshot.Expenses[0].ID != expense.ID || len(snapshot.Balances) != 2 ||
+			len(snapshot.Settlements) != 2 || snapshot.Budget.Spent != 12 || snapshot.Budget.Remaining != -12 {
+			t.Fatal("unexpected trip snapshot")
+		}
+		for _, balance := range snapshot.Balances {
+			if balance.Balance != 0 {
+				t.Fatal("snapshot has a nonzero balance")
+			}
+		}
+		return snapshot
+	}
+	before := snapshot(1)
+	if storage == nil {
+		t.Log("receipt integration test skipped because TEST_RECEIPTS_ENDPOINT is unset")
+		return
+	}
+	check(call("POST", "/trips/join", member, 25, fmt.Sprintf(`{"code":%q}`, newInvite.Code)), 200)
+	afterJoin := snapshot(2)
+	if afterJoin.Revision <= before.Revision {
+		t.Fatal("membership change did not advance the snapshot revision")
+	}
+	var firstSuggestions trips.Suggestions
+	decode(check(call("GET", suggestionsPath, owner, 0, ""), 200), &firstSuggestions)
+	receiptPath := percentagePath + "/receipt"
+	file := func(fill color.Color) []byte {
+		t.Helper()
+		photo := image.NewRGBA(image.Rect(0, 0, 2, 2))
+		photo.Set(0, 0, fill)
+		var raw bytes.Buffer
+		if err := png.Encode(&raw, photo); err != nil {
+			t.Fatal(err)
+		}
+		return raw.Bytes()
+	}
+	upload := func(token string, key int, data []byte) result {
+		t.Helper()
+		var body bytes.Buffer
+		form := multipart.NewWriter(&body)
+		part, err := form.CreateFormFile("file", "receipt.png")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write(data); err != nil {
+			t.Fatal(err)
+		}
+		if err := form.Close(); err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v1"+receiptPath, bytes.NewReader(body.Bytes()))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Idempotency-Key", fmt.Sprintf("%08x-0000-4000-8000-000000000001", key))
+		request.Header.Set("Content-Type", form.FormDataContentType())
+		response := httptest.NewRecorder()
+		api.ServeHTTP(response, request)
+		return result{request, response}
+	}
+	firstFile := file(color.White)
+	secondFile := file(color.RGBA{R: 255, A: 255})
+	checkCode(upload(owner, 26, []byte("not an image")), 415, "UNSUPPORTED_RECEIPT_MEDIA")
+	checkCode(upload(owner, 26, make([]byte, trips.MaxReceiptSize+1)), 413, "RECEIPT_TOO_LARGE")
+	check(upload(outsider, 26, firstFile), 404)
+	check(call("GET", receiptPath, member, 0, ""), 404)
+	firstMeta := string(check(upload(owner, 26, firstFile), 201))
+	if string(check(upload(owner, 26, firstFile), 201)) != firstMeta {
+		t.Fatal("different multipart boundary changed the replay")
+	}
+	checkCode(upload(owner, 26, secondFile), 409, "IDEMPOTENCY_KEY_REUSED")
+	check(call("GET", receiptPath, outsider, 0, ""), 404)
+	readImage := call("GET", receiptPath, member, 0, "").response
+	if readImage.Code != 200 || readImage.Header().Get("Content-Type") != "image/png" ||
+		readImage.Header().Get("Cache-Control") != "no-store" || !bytes.Equal(readImage.Body.Bytes(), firstFile) {
+		t.Fatalf("incorrect private receipt response: %d", readImage.Code)
+	}
+	objectKey := func() string {
+		t.Helper()
+		var key string
+		if err := pool.QueryRow(t.Context(), `SELECT object_key FROM receipts WHERE expense_id = $1::text::uuid`, expense.ID).Scan(&key); err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	firstKey := objectKey()
+	anonymous := http.Client{Timeout: 5 * time.Second}
+	anonymousResponse, err := anonymous.Get(storageEndpoint + "/" + receiptBucket + "/" + firstKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = anonymousResponse.Body.Close()
+	if anonymousResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("object is not private: %d", anonymousResponse.StatusCode)
+	}
+	afterUpload := snapshot(2)
+	if afterUpload.Revision <= afterJoin.Revision || afterUpload.Expenses[0].Receipt == nil || afterUpload.Expenses[0].Receipt.SizeBytes != int64(len(firstFile)) {
+		t.Fatal("receipt metadata did not appear in the new snapshot")
+	}
+	check(upload(member, 27, secondFile), 201)
+	secondKey := objectKey()
+	if firstKey == secondKey {
+		t.Fatal("replacement reused the object key")
+	}
+	sizes := map[string]int64{firstKey: int64(len(firstFile)), secondKey: int64(len(secondFile))}
+	for key, size := range sizes {
+		if _, err := storage.Get(t.Context(), key, size); err != nil {
+			t.Fatal("object disappeared before it could be queued for cleanup")
+		}
+	}
+	check(call("DELETE", receiptPath, owner, 28, ""), 204)
+	check(call("DELETE", receiptPath, owner, 28, ""), 204)
+	check(call("GET", receiptPath, owner, 0, ""), 404)
+	afterDelete := snapshot(2)
+	if afterDelete.Revision <= afterUpload.Revision || afterDelete.Expenses[0].Receipt != nil {
+		t.Fatal("snapshot still includes removed receipt")
+	}
+	var latestSuggestions trips.Suggestions
+	decode(check(call("GET", suggestionsPath, owner, 0, ""), 200), &latestSuggestions)
+	if latestSuggestions.Revision != firstSuggestions.Revision {
+		t.Fatal("attachments should not advance the financial revision")
+	}
+	if _, err := pool.Exec(t.Context(), `UPDATE receipt_cleanup SET delete_after = clock_timestamp() WHERE object_key = ANY($1::text[])`, []string{firstKey, secondKey}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tripService.CleanupReceipts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for key, size := range sizes {
+		if _, err := storage.Get(t.Context(), key, size); err == nil {
+			t.Fatal("detached object was not removed")
+		}
+	}
+	var remainingJobs int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM receipt_cleanup WHERE object_key = ANY($1::text[])`, []string{firstKey, secondKey}).Scan(&remainingJobs); err != nil || remainingJobs != 0 {
+		t.Fatal("object cleanup did not clear completed records")
 	}
 }

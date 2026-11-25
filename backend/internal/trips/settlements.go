@@ -66,13 +66,17 @@ func (s *Service) ListSettlements(ctx context.Context, userID, tripID string, li
 		if _, err := financialRevision(ctx, tx, userID, tripID); err != nil {
 			return nil, err
 		}
-		rows, err := tx.Query(ctx, `SELECT id::text, trip_id::text, from_user_id::text, to_user_id::text, amount, created_at
-			FROM settlements WHERE trip_id = $1::text::uuid ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, tripID, limit, offset)
-		if err != nil {
-			return nil, err
-		}
-		return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Settlement, error) { return scanSettlement(row) })
+		return readSettlements(ctx, tx, tripID, limit, offset)
 	})
+}
+
+func readSettlements(ctx context.Context, tx pgx.Tx, tripID string, limit, offset int32) ([]Settlement, error) {
+	rows, err := tx.Query(ctx, `SELECT id::text, trip_id::text, from_user_id::text, to_user_id::text, amount, created_at
+		FROM settlements WHERE trip_id = $1::text::uuid ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, tripID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Settlement, error) { return scanSettlement(row) })
 }
 
 func (s *Service) CreateSettlement(ctx context.Context, userID, tripID, key string, input SettlementInput) (Settlement, error) {
@@ -191,7 +195,7 @@ func financialRevision(ctx context.Context, db queryRower, userID, tripID string
 }
 
 func bumpFinancialRevision(ctx context.Context, tx pgx.Tx, tripID string) error {
-	_, err := tx.Exec(ctx, `UPDATE trips SET financial_revision = financial_revision + 1 WHERE id = $1::text::uuid`, tripID)
+	_, err := tx.Exec(ctx, `UPDATE trips SET financial_revision = financial_revision + 1, snapshot_revision = snapshot_revision + 1 WHERE id = $1::text::uuid`, tripID)
 	return err
 }
 

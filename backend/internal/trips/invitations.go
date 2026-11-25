@@ -63,6 +63,9 @@ func (s *Service) Join(ctx context.Context, userID, key, code string) (Trip, err
 				return Trip{}, err
 			}
 			if change.RowsAffected() == 1 {
+				if err := bumpSnapshotRevision(ctx, tx, tripID); err != nil {
+					return Trip{}, err
+				}
 				if err := notifyMemberJoined(ctx, tx, tripID, userID); err != nil {
 					return Trip{}, err
 				}

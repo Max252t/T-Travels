@@ -15,8 +15,12 @@ type Budget struct {
 }
 
 func (s *Service) Budget(ctx context.Context, userID, tripID string) (Budget, error) {
+	return readBudget(ctx, s.pool, userID, tripID)
+}
+
+func readBudget(ctx context.Context, db queryRower, userID, tripID string) (Budget, error) {
 	var budget Budget
-	err := s.pool.QueryRow(ctx, `SELECT t.budget, t.currency, COALESCE(sum(e.amount), 0)::bigint FROM trips t
+	err := db.QueryRow(ctx, `SELECT t.budget, t.currency, COALESCE(sum(e.amount), 0)::bigint FROM trips t
 		JOIN trip_members m ON m.trip_id = t.id
 		LEFT JOIN expenses e ON e.trip_id = t.id AND e.deleted_at IS NULL
 		WHERE t.id = $1::text::uuid AND m.user_id = $2::text::uuid AND m.left_at IS NULL GROUP BY t.id`, tripID, userID).

@@ -48,6 +48,8 @@ jobs:
     env:
       COMPOSE_PROJECT_NAME: t-travels-ci
       POSTGRES_PASSWORD: ci_test_password
+      RECEIPTS_S3_ACCESS_KEY: t_travels_ci
+      RECEIPTS_S3_SECRET_KEY: t_travels_ci_storage_password
     defaults:
       run:
         working-directory: backend
@@ -57,7 +59,8 @@ jobs:
           persist-credentials: false
       - name: Apply and roll back migrations
         run: |
-          docker compose up -d --wait postgres
+          docker compose up -d --wait postgres object-storage
+          curl --fail --retry 8 --retry-connrefused --retry-delay 1 http://127.0.0.1:9000/health/ready
           docker compose run --rm migrate up
           docker compose run --rm migrate down -all
           docker compose run --rm migrate up
@@ -71,6 +74,7 @@ jobs:
       - name: Verify backend with PostgreSQL
         env:
           TEST_DATABASE_URL: postgres://t_travels:ci_test_password@127.0.0.1:5432/t_travels?sslmode=disable
+          TEST_RECEIPTS_ENDPOINT: http://127.0.0.1:9000
         run: go test -race -mod=readonly -count=1 -v -run 'Postgres$' ./cmd/api
       - name: Remove test database
         if: always()

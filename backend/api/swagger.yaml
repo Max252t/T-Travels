@@ -858,6 +858,137 @@ paths:
           $ref: '#/components/responses/TripMemberConflict'
         '500':
           $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/expenses/{expenseId}/receipt:
+    get:
+      operationId: getExpenseReceipt
+      summary: Скачать фото чека
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/ExpenseId'
+      responses:
+        '200':
+          description: Приватное изображение чека
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/ReceiptNotFound'
+        '429':
+          $ref: '#/components/responses/ReceiptBusy'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+        '503':
+          $ref: '#/components/responses/ReceiptStorageUnavailable'
+    post:
+      operationId: putExpenseReceipt
+      summary: Прикрепить или заменить фото чека
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/ExpenseId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        description: Один фотографический файл JPEG или PNG до 5 МиБ и 12 мегапикселей. Максимальная сторона 4096 пикселей.
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Фото чека сохранено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Receipt'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '403':
+          $ref: '#/components/responses/ExpenseForbidden'
+        '404':
+          $ref: '#/components/responses/ExpenseNotFound'
+        '409':
+          $ref: '#/components/responses/ExpenseConflict'
+        '413':
+          $ref: '#/components/responses/ReceiptTooLarge'
+        '415':
+          $ref: '#/components/responses/ReceiptMediaUnsupported'
+        '429':
+          $ref: '#/components/responses/ReceiptBusy'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+        '503':
+          $ref: '#/components/responses/ReceiptStorageUnavailable'
+    delete:
+      operationId: deleteExpenseReceipt
+      summary: Удалить фото чека
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/ExpenseId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: Чек удалён
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '403':
+          $ref: '#/components/responses/ExpenseForbidden'
+        '404':
+          $ref: '#/components/responses/ExpenseNotFound'
+        '409':
+          $ref: '#/components/responses/ExpenseConflict'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
+  /api/v1/trips/{tripId}/sync:
+    get:
+      operationId: syncTrip
+      summary: Получить согласованный снимок поездки
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+      responses:
+        '200':
+          description: Снимок поездки на одной ревизии
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripSnapshot'
+        '400':
+          $ref: '#/components/responses/TripBadRequest'
+        '401':
+          $ref: '#/components/responses/TripUnauthorized'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/SnapshotLimitExceeded'
+        '500':
+          $ref: '#/components/responses/TripInternalError'
 components:
   parameters:
     TripMemberUserId:
@@ -1123,7 +1254,88 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
+    ReceiptNotFound:
+      description: Чек не найден или недоступен (`RECEIPT_NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ReceiptTooLarge:
+      description: Файл превышает лимит 5 МиБ (`RECEIPT_TOO_LARGE`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ReceiptMediaUnsupported:
+      description: Ожидается корректное изображение JPEG или PNG (`UNSUPPORTED_RECEIPT_MEDIA`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ReceiptBusy:
+      description: Слишком много одновременных запросов к чекам (`RECEIPT_BUSY`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ReceiptStorageUnavailable:
+      description: Хранилище чеков временно недоступно (`RECEIPT_STORAGE_UNAVAILABLE`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    SnapshotLimitExceeded:
+      description: Больше 1000 записей одного вида, доступны постраничные запросы (`SNAPSHOT_LIMIT_EXCEEDED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
   schemas:
+    Receipt:
+      type: object
+      additionalProperties: false
+      required: [content_type, size_bytes, updated_at]
+      properties:
+        content_type:
+          type: string
+          enum: [image/jpeg, image/png]
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 5242880
+        updated_at:
+          type: string
+          format: date-time
+    TripSnapshot:
+      type: object
+      additionalProperties: false
+      required: [revision, trip, members, expenses, budget, balances, settlements]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        trip:
+          $ref: '#/components/schemas/Trip'
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/TripMember'
+        expenses:
+          type: array
+          items:
+            $ref: '#/components/schemas/Expense'
+        budget:
+          $ref: '#/components/schemas/TripBudget'
+        balances:
+          type: array
+          items:
+            $ref: '#/components/schemas/TripBalance'
+        settlements:
+          type: array
+          items:
+            $ref: '#/components/schemas/Settlement'
     OpenExpenseDispute:
       type: object
       additionalProperties: false
@@ -1444,6 +1656,8 @@ components:
             $ref: '#/components/schemas/ExpenseShare'
         dispute:
           $ref: '#/components/schemas/ExpenseDispute'
+        receipt:
+          $ref: '#/components/schemas/Receipt'
     TripCreate:
       type: object
       additionalProperties: false
