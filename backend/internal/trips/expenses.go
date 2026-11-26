@@ -70,11 +70,8 @@ const expenseFields = `e.id::text, e.trip_id::text, e.created_by::text, e.versio
 	(SELECT jsonb_build_object('content_type', r.content_type, 'size_bytes', r.size_bytes, 'updated_at', r.updated_at)
 		FROM receipts r WHERE r.expense_id = e.id)`
 
-func (s *Service) ListExpenses(ctx context.Context, userID, tripID string, limit, offset int32) ([]Expense, error) {
-	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Expense, error) {
-		if _, err := getTrip(ctx, tx, userID, tripID, false); err != nil {
-			return nil, err
-		}
+func (s *Service) ListExpenses(ctx context.Context, userID, tripID string, limit, offset int32, expected int64) (Revisioned[[]Expense], error) {
+	return readAtRevision(ctx, s.pool, userID, tripID, expected, func(tx pgx.Tx) ([]Expense, error) {
 		return readExpenses(ctx, tx, tripID, limit, offset)
 	})
 }

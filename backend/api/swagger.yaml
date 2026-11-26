@@ -250,8 +250,12 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/SnapshotRevision'
       responses:
         '200':
+          headers:
+            X-Snapshot-Revision:
+              $ref: '#/components/headers/SnapshotRevision'
           description: Поездка
           content:
             application/json:
@@ -263,6 +267,8 @@ paths:
           $ref: '#/components/responses/TripUnauthorized'
         '404':
           $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/SnapshotRevisionConflict'
         '500':
           $ref: '#/components/responses/TripInternalError'
     patch:
@@ -313,8 +319,12 @@ paths:
         - $ref: '#/components/parameters/TripId'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/SnapshotRevision'
       responses:
         '200':
+          headers:
+            X-Snapshot-Revision:
+              $ref: '#/components/headers/SnapshotRevision'
           description: Участники поездки
           content:
             application/json:
@@ -328,6 +338,8 @@ paths:
           $ref: '#/components/responses/TripUnauthorized'
         '404':
           $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/SnapshotRevisionConflict'
         '500':
           $ref: '#/components/responses/TripInternalError'
   /api/v1/trips/{tripId}/invitations:
@@ -465,8 +477,12 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/SnapshotRevision'
       responses:
         '200':
+          headers:
+            X-Snapshot-Revision:
+              $ref: '#/components/headers/SnapshotRevision'
           description: Бюджет поездки
           content:
             application/json:
@@ -478,6 +494,8 @@ paths:
           $ref: '#/components/responses/TripUnauthorized'
         '404':
           $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/SnapshotRevisionConflict'
         '500':
           $ref: '#/components/responses/TripInternalError'
   /api/v1/trips/{tripId}/expenses:
@@ -490,8 +508,12 @@ paths:
         - $ref: '#/components/parameters/TripId'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/SnapshotRevision'
       responses:
         '200':
+          headers:
+            X-Snapshot-Revision:
+              $ref: '#/components/headers/SnapshotRevision'
           description: Действующие расходы
           content:
             application/json:
@@ -505,6 +527,8 @@ paths:
           $ref: '#/components/responses/TripUnauthorized'
         '404':
           $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/SnapshotRevisionConflict'
         '500':
           $ref: '#/components/responses/TripInternalError'
     post:
@@ -640,8 +664,12 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/SnapshotRevision'
       responses:
         '200':
+          headers:
+            X-Snapshot-Revision:
+              $ref: '#/components/headers/SnapshotRevision'
           description: Балансы участников в копейках
           content:
             application/json:
@@ -655,6 +683,8 @@ paths:
           $ref: '#/components/responses/TripUnauthorized'
         '404':
           $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/SnapshotRevisionConflict'
         '500':
           $ref: '#/components/responses/TripInternalError'
   /api/v1/trips/{tripId}/settlements/suggestions:
@@ -690,8 +720,12 @@ paths:
         - $ref: '#/components/parameters/TripId'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/SnapshotRevision'
       responses:
         '200':
+          headers:
+            X-Snapshot-Revision:
+              $ref: '#/components/headers/SnapshotRevision'
           description: История переводов
           content:
             application/json:
@@ -705,6 +739,8 @@ paths:
           $ref: '#/components/responses/TripUnauthorized'
         '404':
           $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/SnapshotRevisionConflict'
         '500':
           $ref: '#/components/responses/TripInternalError'
     post:
@@ -790,6 +826,18 @@ paths:
         - $ref: '#/components/parameters/TripId'
         - $ref: '#/components/parameters/ExpenseId'
         - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [dispute_id]
+              properties:
+                dispute_id:
+                  type: string
+                  format: uuid
       responses:
         '200':
           description: Закрытый спор
@@ -798,7 +846,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/ExpenseDispute'
         '400':
-          $ref: '#/components/responses/TripBadRequest'
+          description: Некорректный запрос или UUID спора (`INVALID_REQUEST`, `INVALID_IDEMPOTENCY_KEY` или `INVALID_DISPUTE_ID`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
         '401':
           $ref: '#/components/responses/TripUnauthorized'
         '403':
@@ -807,6 +859,10 @@ paths:
           $ref: '#/components/responses/DisputeNotFound'
         '409':
           $ref: '#/components/responses/DisputeConflict'
+        '413':
+          $ref: '#/components/responses/AuthTooLarge'
+        '415':
+          $ref: '#/components/responses/AuthUnsupportedMedia'
         '500':
           $ref: '#/components/responses/TripInternalError'
   /api/v1/trips/{tripId}/leave:
@@ -975,6 +1031,9 @@ paths:
       responses:
         '200':
           description: Снимок поездки на одной ревизии
+          headers:
+            X-Snapshot-Revision:
+              $ref: '#/components/headers/SnapshotRevision'
           content:
             application/json:
               schema:
@@ -990,7 +1049,23 @@ paths:
         '500':
           $ref: '#/components/responses/TripInternalError'
 components:
+  headers:
+    SnapshotRevision:
+      description: Ревизия, на которой прочитаны данные поездки.
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
   parameters:
+    SnapshotRevision:
+      in: query
+      name: revision
+      description: Ревизия из X-Snapshot-Revision. Обязательна на страницах с offset больше нуля. При несовпадении начните чтение поездки заново.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
     TripMemberUserId:
       in: path
       name: userId
@@ -1113,7 +1188,7 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
     TripBadRequest:
-      description: Некорректный запрос (`INVALID_REQUEST` или `INVALID_IDEMPOTENCY_KEY`)
+      description: Некорректный запрос (`INVALID_REQUEST`, `INVALID_IDEMPOTENCY_KEY`, `INVALID_SNAPSHOT_REVISION` или `SNAPSHOT_REVISION_REQUIRED`)
       content:
         application/json:
           schema:
@@ -1177,7 +1252,7 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
     ExpenseBadRequest:
-      description: Некорректный запрос, расход или набор долей (`INVALID_REQUEST`, `INVALID_EXPENSE` или `INVALID_IDEMPOTENCY_KEY`)
+      description: Некорректный запрос, расход или набор долей (`INVALID_REQUEST`, `INVALID_EXPENSE`, `INVALID_IDEMPOTENCY_KEY`, `INVALID_SNAPSHOT_REVISION` или `SNAPSHOT_REVISION_REQUIRED`)
       content:
         application/json:
           schema:
@@ -1286,6 +1361,18 @@ components:
             $ref: '#/components/schemas/ApiError'
     SnapshotLimitExceeded:
       description: Больше 1000 записей одного вида, доступны постраничные запросы (`SNAPSHOT_LIMIT_EXCEEDED`)
+      headers:
+        X-Snapshot-Revision:
+          $ref: '#/components/headers/SnapshotRevision'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    SnapshotRevisionConflict:
+      description: Поездка изменилась во время синхронизации (`SNAPSHOT_REVISION_CONFLICT`)
+      headers:
+        X-Snapshot-Revision:
+          $ref: '#/components/headers/SnapshotRevision'
       content:
         application/json:
           schema:

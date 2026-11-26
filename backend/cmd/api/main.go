@@ -71,6 +71,7 @@ func run() error {
 		Handler:           newRouter(auth.NewService(pool, jwtKey), tripService),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      35 * time.Second,
 	}
 	slog.Info("starting HTTP server", "addr", addr)
 	return server.ListenAndServe()

@@ -25,6 +25,12 @@ type Receipt struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type ReceiptStore interface {
+	Put(context.Context, string, string, []byte) error
+	Get(context.Context, string, int64) ([]byte, error)
+	Delete(context.Context, string) error
+}
+
 func (s *Service) GetReceipt(ctx context.Context, userID, tripID, expenseID string) (Receipt, []byte, error) {
 	var key string
 	var receipt Receipt
@@ -54,44 +60,61 @@ func (s *Service) PutReceipt(ctx context.Context, userID, tripID, expenseID, key
 	if s.receipts == nil {
 		return Receipt{}, ErrReceiptStorage
 	}
-	if err := requireExpenseEditor(ctx, s.pool, userID, tripID, expenseID); err != nil {
-		return Receipt{}, err
-	}
-	objectKey := "receipts/" + rand.Text()
-	_, err := s.pool.Exec(ctx, `INSERT INTO receipt_cleanup (object_key, delete_after)
-		VALUES ($1, clock_timestamp() + interval '1 hour')`, objectKey)
-	if err != nil {
-		return Receipt{}, err
-	}
-	attemptedUpload := false
-	defer func() {
-		if !attemptedUpload {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-			defer cancel()
-			if _, err := s.pool.Exec(cleanupCtx, `DELETE FROM receipt_cleanup WHERE object_key = $1`, objectKey); err != nil {
-				slog.Warn("unused receipt staging record will be cleaned up later")
-			}
-		}
-	}()
+	operation := "put-receipt/" + tripID + "/" + expenseID
 	fingerprint := struct {
 		ContentType string
 		Digest      [sha256.Size]byte
 	}{contentType, sha256.Sum256(data)}
+	var replayed bool
+	previous, err := inReadTransaction(ctx, s.pool, func(tx pgx.Tx) (Receipt, error) {
+		if err := requireExpenseEditor(ctx, tx, userID, tripID, expenseID); err != nil {
+			return Receipt{}, err
+		}
+		receipt, exists, err := idempotency.Replay[Receipt](ctx, tx, userID, key, operation, fingerprint)
+		if err != nil {
+			return Receipt{}, err
+		}
+		replayed = exists
+		if exists {
+			return receipt, nil
+		}
+		return Receipt{}, checkReceiptExpense(ctx, tx, tripID, expenseID)
+	})
+	if err != nil || replayed {
+		return previous, err
+	}
+	objectKey := "receipts/" + rand.Text()
+	_, err = s.pool.Exec(ctx, `INSERT INTO receipt_cleanup (object_key, delete_after)
+		VALUES ($1, clock_timestamp() + interval '1 hour')`, objectKey)
+	if err != nil {
+		return Receipt{}, err
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		if _, err := s.pool.Exec(cleanupCtx, `UPDATE receipt_cleanup SET delete_after = LEAST(delete_after, clock_timestamp() + interval '1 minute')
+			WHERE object_key = $1`, objectKey); err != nil {
+			slog.Warn("receipt staging record will be cleaned up later")
+		}
+	}()
+	if err := s.receipts.Put(ctx, objectKey, contentType, data); err != nil {
+		return Receipt{}, ErrReceiptStorage
+	}
 	return inTransaction(ctx, s.pool, func(tx pgx.Tx) (Receipt, error) {
 		if err := requireExpenseEditor(ctx, tx, userID, tripID, expenseID); err != nil {
 			return Receipt{}, err
 		}
-		return idempotency.Do(ctx, tx, userID, key, "put-receipt/"+tripID+"/"+expenseID, fingerprint, func() (Receipt, error) {
+		return idempotency.Do(ctx, tx, userID, key, operation, fingerprint, func() (Receipt, error) {
 			if err := lockReceiptExpense(ctx, tx, userID, tripID, expenseID); err != nil {
 				return Receipt{}, err
 			}
 			var staged string
-			if err := tx.QueryRow(ctx, `SELECT object_key FROM receipt_cleanup WHERE object_key = $1 FOR UPDATE`, objectKey).Scan(&staged); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT object_key FROM receipt_cleanup
+				WHERE object_key = $1 AND delete_after > clock_timestamp() FOR UPDATE`, objectKey).Scan(&staged); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return Receipt{}, ErrReceiptStorage
+				}
 				return Receipt{}, err
-			}
-			attemptedUpload = true
-			if err := s.receipts.Put(ctx, objectKey, contentType, data); err != nil {
-				return Receipt{}, ErrReceiptStorage
 			}
 			if _, err := detachReceipt(ctx, tx, expenseID); err != nil {
 				return Receipt{}, err
@@ -143,8 +166,12 @@ func lockReceiptExpense(ctx context.Context, tx pgx.Tx, userID, tripID, expenseI
 	if _, err := getTrip(ctx, tx, userID, tripID, true); err != nil {
 		return err
 	}
+	return checkReceiptExpense(ctx, tx, tripID, expenseID)
+}
+
+func checkReceiptExpense(ctx context.Context, db queryRower, tripID, expenseID string) error {
 	var exists bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM expenses
+	err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM expenses
 		WHERE id = $1::text::uuid AND trip_id = $2::text::uuid AND deleted_at IS NULL)`, expenseID, tripID).Scan(&exists)
 	if err == nil && !exists {
 		return ErrExpenseNotFound

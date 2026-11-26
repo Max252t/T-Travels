@@ -119,10 +119,14 @@ func (h tripRoutes) get(c *gin.Context) {
 	if !ok {
 		return
 	}
+	expected, ok := expectedRevision(c, 0)
+	if !ok {
+		return
+	}
 	ctx, cancel := tripContext(c)
 	defer cancel()
-	result, err := h.service.Get(ctx, c.GetString(userIDContextKey), id)
-	writeTripResult(c, http.StatusOK, result, err)
+	result, err := h.service.Get(ctx, c.GetString(userIDContextKey), id, expected)
+	writeRevisioned(c, result, err)
 }
 
 func (h tripRoutes) update(c *gin.Context) {
@@ -159,10 +163,14 @@ func (h tripRoutes) members(c *gin.Context) {
 	if !ok {
 		return
 	}
+	expected, ok := expectedRevision(c, offset)
+	if !ok {
+		return
+	}
 	ctx, cancel := tripContext(c)
 	defer cancel()
-	result, err := h.service.Members(ctx, c.GetString(userIDContextKey), id, limit, offset)
-	writeTripResult(c, http.StatusOK, result, err)
+	result, err := h.service.Members(ctx, c.GetString(userIDContextKey), id, limit, offset, expected)
+	writeRevisioned(c, result, err)
 }
 
 func (h tripRoutes) invite(c *gin.Context) {
@@ -315,6 +323,8 @@ func writeTripResult(c *gin.Context, status int, result any, err error) {
 		writeAPIError(c, http.StatusServiceUnavailable, "RECEIPT_STORAGE_UNAVAILABLE", "Хранилище чеков временно недоступно")
 	case errors.Is(err, trips.ErrSnapshotLimit):
 		writeAPIError(c, http.StatusConflict, "SNAPSHOT_LIMIT_EXCEEDED", "Используйте постраничные запросы для этой поездки")
+	case errors.Is(err, trips.ErrSnapshotRevision):
+		writeAPIError(c, http.StatusConflict, "SNAPSHOT_REVISION_CONFLICT", "Поездка изменилась. Начните чтение снимка заново")
 	case errors.Is(err, idempotency.ErrKeyReused):
 		writeAPIError(c, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Ключ уже использован для другого запроса")
 	case errors.Is(err, trips.ErrRateLimit):

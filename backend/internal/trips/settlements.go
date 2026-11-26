@@ -46,11 +46,8 @@ type SettlementInput struct {
 	AcknowledgeDisputes bool   `json:"acknowledge_disputes,omitempty"`
 }
 
-func (s *Service) Balances(ctx context.Context, userID, tripID string) ([]Balance, error) {
-	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Balance, error) {
-		if _, err := financialRevision(ctx, tx, userID, tripID); err != nil {
-			return nil, err
-		}
+func (s *Service) Balances(ctx context.Context, userID, tripID string, expected int64) (Revisioned[[]Balance], error) {
+	return readAtRevision(ctx, s.pool, userID, tripID, expected, func(tx pgx.Tx) ([]Balance, error) {
 		return readBalances(ctx, tx, tripID)
 	})
 }
@@ -61,11 +58,8 @@ func (s *Service) SettlementSuggestions(ctx context.Context, userID, tripID stri
 	})
 }
 
-func (s *Service) ListSettlements(ctx context.Context, userID, tripID string, limit, offset int32) ([]Settlement, error) {
-	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Settlement, error) {
-		if _, err := financialRevision(ctx, tx, userID, tripID); err != nil {
-			return nil, err
-		}
+func (s *Service) ListSettlements(ctx context.Context, userID, tripID string, limit, offset int32, expected int64) (Revisioned[[]Settlement], error) {
+	return readAtRevision(ctx, s.pool, userID, tripID, expected, func(tx pgx.Tx) ([]Settlement, error) {
 		return readSettlements(ctx, tx, tripID, limit, offset)
 	})
 }

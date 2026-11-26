@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/Max252t/T-Travels/backend/internal/idempotency"
-	"github.com/Max252t/T-Travels/backend/internal/receipts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/time/rate"
@@ -59,10 +58,10 @@ type Member struct {
 type Service struct {
 	pool     *pgxpool.Pool
 	joins    *rate.Limiter
-	receipts *receipts.Store
+	receipts ReceiptStore
 }
 
-func NewService(pool *pgxpool.Pool, receiptStore *receipts.Store) *Service {
+func NewService(pool *pgxpool.Pool, receiptStore ReceiptStore) *Service {
 	return &Service{pool: pool, joins: rate.NewLimiter(10, 20), receipts: receiptStore}
 }
 
@@ -80,8 +79,10 @@ func (s *Service) List(ctx context.Context, userID string, limit, offset int32) 
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Trip, error) { return scanTrip(row) })
 }
 
-func (s *Service) Get(ctx context.Context, userID, tripID string) (Trip, error) {
-	return getTrip(ctx, s.pool, userID, tripID, false)
+func (s *Service) Get(ctx context.Context, userID, tripID string, expected int64) (Revisioned[Trip], error) {
+	return readAtRevision(ctx, s.pool, userID, tripID, expected, func(tx pgx.Tx) (Trip, error) {
+		return getTrip(ctx, tx, userID, tripID, false)
+	})
 }
 
 func (s *Service) Create(ctx context.Context, userID, key string, input Input) (Trip, error) {
@@ -152,11 +153,8 @@ func (s *Service) Update(ctx context.Context, userID, tripID, key string, patch 
 	})
 }
 
-func (s *Service) Members(ctx context.Context, userID, tripID string, limit, offset int32) ([]Member, error) {
-	return inReadTransaction(ctx, s.pool, func(tx pgx.Tx) ([]Member, error) {
-		if _, err := getTrip(ctx, tx, userID, tripID, false); err != nil {
-			return nil, err
-		}
+func (s *Service) Members(ctx context.Context, userID, tripID string, limit, offset int32, expected int64) (Revisioned[[]Member], error) {
+	return readAtRevision(ctx, s.pool, userID, tripID, expected, func(tx pgx.Tx) ([]Member, error) {
 		return readMembers(ctx, tx, tripID, limit, offset)
 	})
 }

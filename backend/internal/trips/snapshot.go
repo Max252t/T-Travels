@@ -5,11 +5,37 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const snapshotLimit = 1000
 
 var ErrSnapshotLimit = errors.New("trip exceeds the snapshot size limit")
+var ErrSnapshotRevision = errors.New("trip snapshot revision changed")
+
+type Revisioned[T any] struct {
+	Value    T
+	Revision int64
+}
+
+func readAtRevision[T any](ctx context.Context, pool *pgxpool.Pool, userID, tripID string, expected int64, read func(pgx.Tx) (T, error)) (Revisioned[T], error) {
+	return inReadTransaction(ctx, pool, func(tx pgx.Tx) (Revisioned[T], error) {
+		var result Revisioned[T]
+		err := tx.QueryRow(ctx, `SELECT t.snapshot_revision FROM trips t JOIN trip_members m ON m.trip_id = t.id
+			WHERE t.id = $1::text::uuid AND m.user_id = $2::text::uuid AND m.left_at IS NULL`, tripID, userID).Scan(&result.Revision)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return result, ErrNotFound
+		}
+		if err != nil {
+			return result, err
+		}
+		if expected != 0 && result.Revision != expected {
+			return result, ErrSnapshotRevision
+		}
+		result.Value, err = read(tx)
+		return result, err
+	})
+}
 
 type Snapshot struct {
 	Revision    int64        `json:"revision"`
@@ -35,7 +61,7 @@ func (s *Service) Snapshot(ctx context.Context, userID, tripID string) (Snapshot
 			return Snapshot{}, err
 		}
 		if members > snapshotLimit {
-			return Snapshot{}, ErrSnapshotLimit
+			return Snapshot{Revision: snapshot.Revision}, ErrSnapshotLimit
 		}
 		snapshot.Members, err = readMembers(ctx, tx, tripID, snapshotLimit+1, 0)
 		if err != nil {
@@ -50,7 +76,7 @@ func (s *Service) Snapshot(ctx context.Context, userID, tripID string) (Snapshot
 			return Snapshot{}, err
 		}
 		if len(snapshot.Members) > snapshotLimit || len(snapshot.Expenses) > snapshotLimit || len(snapshot.Settlements) > snapshotLimit {
-			return Snapshot{}, ErrSnapshotLimit
+			return Snapshot{Revision: snapshot.Revision}, ErrSnapshotLimit
 		}
 		snapshot.Budget, err = readBudget(ctx, tx, userID, tripID)
 		if err != nil {
@@ -61,7 +87,7 @@ func (s *Service) Snapshot(ctx context.Context, userID, tripID string) (Snapshot
 			return Snapshot{}, err
 		}
 		if len(snapshot.Balances) > snapshotLimit {
-			return Snapshot{}, ErrSnapshotLimit
+			return Snapshot{Revision: snapshot.Revision}, ErrSnapshotLimit
 		}
 		return snapshot, nil
 	})

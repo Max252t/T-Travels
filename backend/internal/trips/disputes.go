@@ -46,10 +46,11 @@ func (s *Service) OpenDispute(ctx context.Context, userID, tripID, expenseID, ke
 	})
 }
 
-func (s *Service) ResolveDispute(ctx context.Context, userID, tripID, expenseID, key string) (ExpenseDispute, error) {
-	return s.changeDispute(ctx, userID, tripID, expenseID, key, "resolve-dispute", nil, "dispute_resolved", func(tx pgx.Tx) (ExpenseDispute, error) {
+func (s *Service) ResolveDispute(ctx context.Context, userID, tripID, expenseID, disputeID, key string) (ExpenseDispute, error) {
+	return s.changeDispute(ctx, userID, tripID, expenseID, key, "resolve-dispute", disputeID, "dispute_resolved", func(tx pgx.Tx) (ExpenseDispute, error) {
 		var authorID string
-		err := tx.QueryRow(ctx, `SELECT created_by::text FROM expense_disputes WHERE expense_id = $1::text::uuid AND resolved_at IS NULL`, expenseID).Scan(&authorID)
+		err := tx.QueryRow(ctx, `SELECT created_by::text FROM expense_disputes
+			WHERE trip_id = $1::text::uuid AND expense_id = $2::text::uuid AND id = $3::text::uuid AND resolved_at IS NULL`, tripID, expenseID, disputeID).Scan(&authorID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ExpenseDispute{}, ErrNoDispute
 		}
@@ -60,7 +61,8 @@ func (s *Service) ResolveDispute(ctx context.Context, userID, tripID, expenseID,
 			return ExpenseDispute{}, ErrDisputeAuthor
 		}
 		return scanDispute(tx.QueryRow(ctx, `UPDATE expense_disputes SET resolved_at = clock_timestamp()
-			WHERE expense_id = $1::text::uuid AND resolved_at IS NULL RETURNING `+disputeFields, expenseID))
+			WHERE trip_id = $1::text::uuid AND expense_id = $2::text::uuid AND id = $3::text::uuid
+				AND created_by = $4::text::uuid AND resolved_at IS NULL RETURNING `+disputeFields, tripID, expenseID, disputeID, userID))
 	})
 }
 

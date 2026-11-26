@@ -12,10 +12,14 @@ func (h tripRoutes) balances(c *gin.Context) {
 	if !ok {
 		return
 	}
+	expected, ok := expectedRevision(c, 0)
+	if !ok {
+		return
+	}
 	ctx, cancel := tripContext(c)
 	defer cancel()
-	result, err := h.service.Balances(ctx, c.GetString(userIDContextKey), tripID)
-	writeTripResult(c, http.StatusOK, result, err)
+	result, err := h.service.Balances(ctx, c.GetString(userIDContextKey), tripID, expected)
+	writeRevisioned(c, result, err)
 }
 
 func (h tripRoutes) settlementSuggestions(c *gin.Context) {
@@ -38,10 +42,14 @@ func (h tripRoutes) listSettlements(c *gin.Context) {
 	if !ok {
 		return
 	}
+	expected, ok := expectedRevision(c, offset)
+	if !ok {
+		return
+	}
 	ctx, cancel := tripContext(c)
 	defer cancel()
-	result, err := h.service.ListSettlements(ctx, c.GetString(userIDContextKey), tripID, limit, offset)
-	writeTripResult(c, http.StatusOK, result, err)
+	result, err := h.service.ListSettlements(ctx, c.GetString(userIDContextKey), tripID, limit, offset, expected)
+	writeRevisioned(c, result, err)
 }
 
 func (h tripRoutes) createSettlement(c *gin.Context) {
