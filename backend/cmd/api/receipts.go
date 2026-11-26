@@ -31,6 +31,10 @@ func (h tripRoutes) getReceipt(c *gin.Context) {
 		writeTripResult(c, 0, nil, err)
 		return
 	}
+	if err := http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		writeTripResult(c, 0, nil, err)
+		return
+	}
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Data(http.StatusOK, metadata.ContentType, data)
@@ -148,5 +152,8 @@ func (h tripRoutes) syncTrip(c *gin.Context) {
 	ctx, cancel := tripContext(c)
 	defer cancel()
 	result, err := h.service.Snapshot(ctx, c.GetString(userIDContextKey), tripID)
+	if err == nil || errors.Is(err, trips.ErrSnapshotLimit) {
+		setSnapshotRevision(c, result.Revision)
+	}
 	writeTripResult(c, http.StatusOK, result, err)
 }

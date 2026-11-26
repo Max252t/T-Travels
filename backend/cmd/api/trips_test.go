@@ -82,7 +82,11 @@ func TestTripsPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tripService := trips.NewService(pool, storage)
+	var receiptStore trips.ReceiptStore
+	if storage != nil {
+		receiptStore = storage
+	}
+	tripService := trips.NewService(pool, receiptStore)
 	api := newRouter(authService, tripService)
 	contract := loadContract(t, api)
 	type result struct {
@@ -327,7 +331,9 @@ func TestTripsPostgres(t *testing.T) {
 		t.Fatal("incorrect dispute or replay")
 	}
 	checkCode(call("POST", disputePath, owner, 20, reason), 409, "EXPENSE_DISPUTE_OPEN")
-	checkCode(call("POST", disputePath+"/resolve", owner, 20, ""), 403, "DISPUTE_AUTHOR_REQUIRED")
+	resolve := func(disputeID string) string { return fmt.Sprintf(`{"dispute_id":%q}`, disputeID) }
+	checkCode(call("POST", disputePath+"/resolve", owner, 20, resolve(opened.ID)), 403, "DISPUTE_AUTHOR_REQUIRED")
+	checkCode(call("POST", disputePath+"/resolve", member, 21, `{}`), 400, "INVALID_DISPUTE_ID")
 	checkCode(call("DELETE", percentagePath+"?version=2", owner, 20, ""), 409, "EXPENSE_DISPUTE_OPEN")
 	var disputedExpense trips.Expense
 	decode(check(call("GET", percentagePath, owner, 0, ""), 200), &disputedExpense)
@@ -426,11 +432,11 @@ func TestTripsPostgres(t *testing.T) {
 	}
 	checkCode(call("POST", leavePath, member, 19, ""), 409, "MEMBER_DISPUTE_OPEN")
 	checkCode(call("DELETE", removePath, owner, 19, ""), 409, "MEMBER_DISPUTE_OPEN")
-	resolvedJSON := string(check(call("POST", disputePath+"/resolve", member, 21, ""), 200))
+	resolvedJSON := string(check(call("POST", disputePath+"/resolve", member, 21, resolve(opened.ID)), 200))
 	var resolved trips.ExpenseDispute
 	decode([]byte(resolvedJSON), &resolved)
 	if resolved.ID != opened.ID || resolved.ResolvedAt == nil ||
-		string(check(call("POST", disputePath+"/resolve", member, 21, ""), 200)) != resolvedJSON {
+		string(check(call("POST", disputePath+"/resolve", member, 21, resolve(opened.ID)), 200)) != resolvedJSON {
 		t.Fatal("resolution was not saved and replayed")
 	}
 	if readSuggestions(0).HasOpenDisputes {
@@ -441,6 +447,16 @@ func TestTripsPostgres(t *testing.T) {
 		Scan(&resolvedCount); err != nil || resolvedCount != 1 {
 		t.Fatal("dispute history was not preserved")
 	}
+	var newer trips.ExpenseDispute
+	decode(check(call("POST", disputePath, member, 30, reason), 201), &newer)
+	checkCode(call("POST", disputePath+"/resolve", member, 31, resolve(opened.ID)), 404, "DISPUTE_NOT_FOUND")
+	checkCode(call("POST", disputePath+"/resolve", member, 21, resolve(newer.ID)), 409, "IDEMPOTENCY_KEY_REUSED")
+	var stillDisputed trips.Expense
+	decode(check(call("GET", percentagePath, member, 0, ""), 200), &stillDisputed)
+	if stillDisputed.Dispute == nil || stillDisputed.Dispute.ID != newer.ID {
+		t.Fatal("a delayed resolution closed the wrong dispute")
+	}
+	check(call("POST", disputePath+"/resolve", member, 32, resolve(newer.ID)), 200)
 
 	check(call("POST", leavePath, member, 19, ""), 204)
 	check(call("POST", leavePath, member, 19, ""), 204)
@@ -486,8 +502,53 @@ func TestTripsPostgres(t *testing.T) {
 		return snapshot
 	}
 	before := snapshot(1)
+	verifyPagination := func() {
+		t.Helper()
+		_, err := pool.Exec(t.Context(), `WITH bumped AS (
+			UPDATE trips SET snapshot_revision = snapshot_revision + 1 WHERE id = $1::text::uuid RETURNING id
+		), seeded AS (
+			INSERT INTO expenses (trip_id, created_by, title, amount, category, payer_id, split_type, expense_date)
+			SELECT id, $2::text::uuid, 'Pagination fixture', 1, 'food', $2::text::uuid, 'equal', DATE '2027-01-01'
+			FROM bumped CROSS JOIN generate_series(1, 1000) RETURNING trip_id, id
+		) INSERT INTO expense_splits (trip_id, expense_id, user_id, amount)
+		SELECT trip_id, id, $2::text::uuid, 1 FROM seeded`, trip.ID, users[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		overflow := call("GET", syncPath, owner, 0, "")
+		checkCode(overflow, 409, "SNAPSHOT_LIMIT_EXCEEDED")
+		revision := overflow.response.Header().Get(snapshotRevisionHeader)
+		if revision == "" {
+			t.Fatal("missing fallback snapshot revision")
+		}
+		first := call("GET", expensesPath+"?limit=1&revision="+revision, owner, 0, "")
+		var firstPage []trips.Expense
+		decode(check(first, 200), &firstPage)
+		if len(firstPage) != 1 || first.response.Header().Get(snapshotRevisionHeader) != revision {
+			t.Fatal("incorrect first page revision")
+		}
+		checkCode(call("GET", expensesPath+"?limit=1&offset=1", owner, 0, ""), 400, "SNAPSHOT_REVISION_REQUIRED")
+		continuation := expensesPath + "?limit=1&offset=1&revision=" + revision
+		second := call("GET", continuation, owner, 0, "")
+		var secondPage []trips.Expense
+		decode(check(second, 200), &secondPage)
+		if len(secondPage) != 1 || secondPage[0].ID == firstPage[0].ID || second.response.Header().Get(snapshotRevisionHeader) != revision {
+			t.Fatal("incorrect continuation for an unchanged revision")
+		}
+		check(call("DELETE", expensesPath+"/"+firstPage[0].ID+"?version=1", owner, 40, ""), 204)
+		stale := call("GET", continuation, owner, 0, "")
+		checkCode(stale, 409, "SNAPSHOT_REVISION_CONFLICT")
+		checkCode(call("GET", budgetPath+"?revision="+revision, owner, 0, ""), 409, "SNAPSHOT_REVISION_CONFLICT")
+		restarted := call("GET", expensesPath+"?limit=1", owner, 0, "")
+		decode(check(restarted, 200), &firstPage)
+		if len(firstPage) != 1 || firstPage[0].ID != secondPage[0].ID || stale.response.Header().Get(snapshotRevisionHeader) != restarted.response.Header().Get(snapshotRevisionHeader) ||
+			restarted.response.Header().Get(snapshotRevisionHeader) == revision {
+			t.Fatal("restarting on the new revision skipped an expense")
+		}
+	}
 	if storage == nil {
 		t.Log("receipt integration test skipped because TEST_RECEIPTS_ENDPOINT is unset")
+		verifyPagination()
 		return
 	}
 	check(call("POST", "/trips/join", member, 25, fmt.Sprintf(`{"code":%q}`, newInvite.Code)), 200)
@@ -496,7 +557,6 @@ func TestTripsPostgres(t *testing.T) {
 		t.Fatal("membership change did not advance the snapshot revision")
 	}
 	var firstSuggestions trips.Suggestions
-	decode(check(call("GET", suggestionsPath, owner, 0, ""), 200), &firstSuggestions)
 	receiptPath := percentagePath + "/receipt"
 	file := func(fill color.Color) []byte {
 		t.Helper()
@@ -508,7 +568,7 @@ func TestTripsPostgres(t *testing.T) {
 		}
 		return raw.Bytes()
 	}
-	upload := func(token string, key int, data []byte) result {
+	uploadRequest := func(token string, key int, data []byte) *http.Request {
 		t.Helper()
 		var body bytes.Buffer
 		form := multipart.NewWriter(&body)
@@ -526,6 +586,10 @@ func TestTripsPostgres(t *testing.T) {
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Set("Idempotency-Key", fmt.Sprintf("%08x-0000-4000-8000-000000000001", key))
 		request.Header.Set("Content-Type", form.FormDataContentType())
+		return request
+	}
+	upload := func(token string, key int, data []byte) result {
+		request := uploadRequest(token, key, data)
 		response := httptest.NewRecorder()
 		api.ServeHTTP(response, request)
 		return result{request, response}
@@ -536,16 +600,39 @@ func TestTripsPostgres(t *testing.T) {
 	checkCode(upload(owner, 26, make([]byte, trips.MaxReceiptSize+1)), 413, "RECEIPT_TOO_LARGE")
 	check(upload(outsider, 26, firstFile), 404)
 	check(call("GET", receiptPath, member, 0, ""), 404)
-	firstMeta := string(check(upload(owner, 26, firstFile), 201))
+	gate := &pausedReceiptStore{Store: storage, started: make(chan string, 1), release: make(chan struct{})}
+	delayedRouter := newRouter(authService, trips.NewService(pool, gate))
+	request := uploadRequest(owner, 26, firstFile)
+	response := httptest.NewRecorder()
+	finished := make(chan struct{})
+	go func() { defer close(finished); delayedRouter.ServeHTTP(response, request) }()
+	select {
+	case <-gate.started:
+	case <-time.After(5 * time.Second):
+		close(gate.release)
+		t.Fatal("upload did not reach object storage")
+	}
+	patchWhileUploading := call("PATCH", percentagePath, owner, 29, `{"version":3,"description":"Проверка медленной загрузки"}`)
+	close(gate.release)
+	<-finished
+	check(patchWhileUploading, 200)
+	decode(check(call("GET", suggestionsPath, owner, 0, ""), 200), &firstSuggestions)
+	firstMeta := string(check(result{request, response}, 201))
 	if string(check(upload(owner, 26, firstFile), 201)) != firstMeta {
 		t.Fatal("different multipart boundary changed the replay")
 	}
 	checkCode(upload(owner, 26, secondFile), 409, "IDEMPOTENCY_KEY_REUSED")
 	check(call("GET", receiptPath, outsider, 0, ""), 404)
-	readImage := call("GET", receiptPath, member, 0, "").response
+	download := httptest.NewRequest(http.MethodGet, "/api/v1"+receiptPath, nil)
+	download.Header.Set("Authorization", "Bearer "+member)
+	readImage := &writeDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	api.ServeHTTP(readImage, download)
 	if readImage.Code != 200 || readImage.Header().Get("Content-Type") != "image/png" ||
 		readImage.Header().Get("Cache-Control") != "no-store" || !bytes.Equal(readImage.Body.Bytes(), firstFile) {
 		t.Fatalf("incorrect private receipt response: %d", readImage.Code)
+	}
+	if remaining := time.Until(readImage.deadline); remaining <= 0 || remaining > 10*time.Second {
+		t.Fatal("receipt response has no bounded write deadline")
 	}
 	objectKey := func() string {
 		t.Helper()
@@ -607,4 +694,59 @@ func TestTripsPostgres(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM receipt_cleanup WHERE object_key = ANY($1::text[])`, []string{firstKey, secondKey}).Scan(&remainingJobs); err != nil || remainingJobs != 0 {
 		t.Fatal("object cleanup did not clear completed records")
 	}
+	revoked := &pausedReceiptStore{Store: storage, started: make(chan string, 1), release: make(chan struct{})}
+	revokedRouter := newRouter(authService, trips.NewService(pool, revoked))
+	revokedRequest := uploadRequest(member, 42, firstFile)
+	revokedResponse := httptest.NewRecorder()
+	revokedDone := make(chan struct{})
+	go func() { defer close(revokedDone); revokedRouter.ServeHTTP(revokedResponse, revokedRequest) }()
+	var stagedKey string
+	select {
+	case stagedKey = <-revoked.started:
+	case <-time.After(5 * time.Second):
+		close(revoked.release)
+		t.Fatal("member upload did not reach object storage")
+	}
+	removal := call("DELETE", removePath, owner, 42, "")
+	close(revoked.release)
+	<-revokedDone
+	check(removal, 204)
+	check(result{revokedRequest, revokedResponse}, 404)
+	check(call("GET", receiptPath, owner, 0, ""), 404)
+	if _, err := pool.Exec(t.Context(), `UPDATE receipt_cleanup SET delete_after = clock_timestamp() WHERE object_key = $1`, stagedKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := tripService.CleanupReceipts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.Get(t.Context(), stagedKey, int64(len(firstFile))); err == nil {
+		t.Fatal("revoked upload was neither bound nor cleaned up")
+	}
+	verifyPagination()
+}
+
+type pausedReceiptStore struct {
+	*receipts.Store
+	started chan string
+	release chan struct{}
+}
+
+func (s *pausedReceiptStore) Put(ctx context.Context, key, contentType string, data []byte) error {
+	s.started <- key
+	select {
+	case <-s.release:
+		return s.Store.Put(ctx, key, contentType, data)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type writeDeadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+}
+
+func (r *writeDeadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	r.deadline = deadline
+	return nil
 }

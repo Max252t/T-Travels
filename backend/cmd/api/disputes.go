@@ -35,11 +35,22 @@ func (h tripRoutes) resolveDispute(c *gin.Context) {
 		return
 	}
 	key, ok := idempotencyKey(c)
-	if !ok || !noBody(c) {
+	if !ok {
+		return
+	}
+	input := decodeJSONRequest[struct {
+		DisputeID string `json:"dispute_id"`
+	}](c)
+	if input == nil {
+		return
+	}
+	disputeID, ok := canonicalUUID(input.DisputeID)
+	if !ok {
+		writeAPIError(c, http.StatusBadRequest, "INVALID_DISPUTE_ID", "Укажите UUID закрываемого спора")
 		return
 	}
 	ctx, cancel := tripContext(c)
 	defer cancel()
-	result, err := h.service.ResolveDispute(ctx, c.GetString(userIDContextKey), tripID, expenseID, key)
+	result, err := h.service.ResolveDispute(ctx, c.GetString(userIDContextKey), tripID, expenseID, disputeID, key)
 	writeTripResult(c, http.StatusOK, result, err)
 }

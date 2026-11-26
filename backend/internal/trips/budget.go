@@ -14,8 +14,10 @@ type Budget struct {
 	Currency  string `json:"currency"`
 }
 
-func (s *Service) Budget(ctx context.Context, userID, tripID string) (Budget, error) {
-	return readBudget(ctx, s.pool, userID, tripID)
+func (s *Service) Budget(ctx context.Context, userID, tripID string, expected int64) (Revisioned[Budget], error) {
+	return readAtRevision(ctx, s.pool, userID, tripID, expected, func(tx pgx.Tx) (Budget, error) {
+		return readBudget(ctx, tx, userID, tripID)
+	})
 }
 
 func readBudget(ctx context.Context, db queryRower, userID, tripID string) (Budget, error) {

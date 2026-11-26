@@ -63,10 +63,14 @@ func (h tripRoutes) tripBudget(c *gin.Context) {
 	if !ok {
 		return
 	}
+	expected, ok := expectedRevision(c, 0)
+	if !ok {
+		return
+	}
 	ctx, cancel := tripContext(c)
 	defer cancel()
-	result, err := h.service.Budget(ctx, c.GetString(userIDContextKey), tripID)
-	writeTripResult(c, http.StatusOK, result, err)
+	result, err := h.service.Budget(ctx, c.GetString(userIDContextKey), tripID, expected)
+	writeRevisioned(c, result, err)
 }
 
 func (h tripRoutes) listExpenses(c *gin.Context) {
@@ -78,10 +82,14 @@ func (h tripRoutes) listExpenses(c *gin.Context) {
 	if !ok {
 		return
 	}
+	expected, ok := expectedRevision(c, offset)
+	if !ok {
+		return
+	}
 	ctx, cancel := tripContext(c)
 	defer cancel()
-	result, err := h.service.ListExpenses(ctx, c.GetString(userIDContextKey), tripID, limit, offset)
-	writeTripResult(c, http.StatusOK, result, err)
+	result, err := h.service.ListExpenses(ctx, c.GetString(userIDContextKey), tripID, limit, offset, expected)
+	writeRevisioned(c, result, err)
 }
 
 func (h tripRoutes) getExpense(c *gin.Context) {
